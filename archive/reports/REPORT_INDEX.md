@@ -53,12 +53,32 @@
 
 ---
 
-## 三、报告保存位置
+## 三、Windows 版本报告索引
+
+| 版本 | 状态 | 说明 |
+|------|------|------|
+| v3 | 历史版本 | 正式包首次构建成功 |
+| v4 | 历史版本 | 调试增强版（未真正修复） |
+| v5 | ❌ 作废 | shim 假 ffmpeg 版本（384 KB，非真实二进制） |
+| v6 | 历史版本 | 真 ffmpeg/ffprobe 带入版本（96 MB） |
+| v7 | ✅ 当前有效 | 修复 ffprobe JSON 解析并完成本地预处理闭环验证 |
+
+**v7 真实验证结果**:
+- 真实素材总数：47 条
+- 成功读取：41 条
+- 失败：6 条
+- 成功率：87.2%
+
+---
+
+## 四、报告保存位置
 
 | 类型 | 路径 |
 |------|------|
 | 项目状态 | `archive/state/PROJECT_STATE.md` |
 | 阶段边界 | `archive/current/NEXT_PHASE_BOUNDARY.md` |
+| Windows 状态 | `archive/current/WINDOWS_INGEST_STATUS.md` |
+| 阶段总结 | `archive/current/WINDOWS_V7_STAGE_SUMMARY.md` |
 | 输入标准 | `archive/current/DOUBAO_VIDEO_INPUT_STANDARD.md` |
 | 里程碑 | `archive/milestones/MILESTONES.md` |
 | 阶段计划 | `archive/current/NEXT_STAGE_INGEST_AND_PREPROCESS_PLAN.md` |

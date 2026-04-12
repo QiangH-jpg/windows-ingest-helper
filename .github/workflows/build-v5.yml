@@ -1,4 +1,4 @@
-name: Build Windows EXE v5 (with ffmpeg)
+name: Build Windows EXE v5 (with ffmpeg) (with ffmpeg)
 
 on:
   workflow_dispatch:
