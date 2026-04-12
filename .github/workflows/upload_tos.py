@@ -23,10 +23,12 @@ print(f"Region: {TOS_REGION}")
 
 client = TosClientV2(ak=TOS_AK, sk=TOS_SK, endpoint=TOS_ENDPOINT, region=TOS_REGION)
 
-zip_path = 'Windows_Ingest_Helper_v7.zip'
+# ZIP 文件在仓库根目录
+zip_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Windows_Ingest_Helper_v7.zip')
 tos_key = 'Windows_Executable/Windows_Ingest_Helper_v7.zip'
 
 print(f"\nUploading {zip_path} to {tos_key}...")
+print(f"File exists: {os.path.exists(zip_path)}")
 
 try:
     client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)
