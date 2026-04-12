@@ -19,10 +19,54 @@ import hashlib
 from pathlib import Path
 
 # 配置
-FFMPEG = "ffmpeg"
 PROXY_WIDTH = 1280
 PROXY_HEIGHT = 720
 PROXY_FPS = 25
+
+# 调试标志
+DEBUG_MODE = True
+
+def get_media_tools_path():
+    """
+    获取 ffmpeg/ffprobe 的路径
+    
+    优先级：
+    1. PyInstaller 打包后的 bin 目录（sys._MEIPASS/bin）
+    2. 当前 exe 所在目录的 bin 目录
+    3. 系统 PATH 中的 ffmpeg/ffprobe（回退）
+    """
+    ffmpeg_path = "ffmpeg"  # 默认回退
+    ffprobe_path = "ffprobe"  # 默认回退
+    
+    # 1. 检查 PyInstaller 打包后的临时目录
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包的应用
+        if hasattr(sys, '_MEIPASS'):
+            # PyInstaller 临时目录
+            bin_dir = os.path.join(sys._MEIPASS, 'bin')
+            if os.path.exists(bin_dir):
+                ffmpeg_candidate = os.path.join(bin_dir, 'ffmpeg.exe')
+                ffprobe_candidate = os.path.join(bin_dir, 'ffprobe.exe')
+                if os.path.exists(ffmpeg_candidate):
+                    ffmpeg_path = ffmpeg_candidate
+                if os.path.exists(ffprobe_candidate):
+                    ffprobe_path = ffprobe_candidate
+        
+        # 2. 检查 exe 所在目录的 bin 目录
+        exe_dir = os.path.dirname(sys.executable)
+        bin_dir = os.path.join(exe_dir, 'bin')
+        if os.path.exists(bin_dir):
+            ffmpeg_candidate = os.path.join(bin_dir, 'ffmpeg.exe')
+            ffprobe_candidate = os.path.join(bin_dir, 'ffprobe.exe')
+            if os.path.exists(ffmpeg_candidate):
+                ffmpeg_path = ffmpeg_candidate
+            if os.path.exists(ffprobe_candidate):
+                ffprobe_path = ffprobe_candidate
+    
+    return ffmpeg_path, ffprobe_path
+
+# 初始化媒体工具路径
+FFMPEG, FFPROBE = get_media_tools_path()
 
 class IngestHelperGUI:
     def __init__(self, root):
@@ -131,11 +175,21 @@ class IngestHelperGUI:
     def scan_videos(self):
         """扫描视频文件"""
         input_dir = self.input_dir.get()
+        
+        # 调试输出
+        self.log("=" * 60)
+        self.log("【调试】扫描参数")
+        self.log(f"  selected_dir={input_dir}")
+        self.log(f"  normalized_dir={os.path.normpath(input_dir) if input_dir else 'N/A'}")
+        self.log(f"  dir_exists={os.path.exists(input_dir) if input_dir else False}")
+        self.log(f"  dir_readable={os.access(input_dir, os.R_OK) if input_dir and os.path.exists(input_dir) else False}")
+        
         if not input_dir or not os.path.exists(input_dir):
-            messagebox.showerror("错误", "请先选择有效的素材目录")
+            self.log("【错误】目录不存在或不可读")
+            messagebox.showerror("错误", f"请先选择有效的素材目录\n\n选择的目录：{input_dir}\n目录存在：{os.path.exists(input_dir) if input_dir else False}")
             return
         
-        self.log(f"开始扫描：{input_dir}")
+        self.log(f"\n开始扫描：{input_dir}")
         self.status_var.set("正在扫描...")
         
         # 清空列表
@@ -145,13 +199,15 @@ class IngestHelperGUI:
         
         # 扫描视频文件
         video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.m4v'}
+        self.log("\n【调试】扫描结果")
         for root, dirs, files in os.walk(input_dir):
             for file in files:
                 if Path(file).suffix.lower() in video_extensions:
                     file_path = os.path.join(root, file)
                     self.video_files.append(file_path)
+                    self.log(f"  找到：{file_path}")
         
-        self.log(f"找到 {len(self.video_files)} 个视频文件")
+        self.log(f"\n找到 {len(self.video_files)} 个视频文件")
         
         # 获取每个视频信息
         for i, file_path in enumerate(self.video_files):
@@ -180,8 +236,14 @@ class IngestHelperGUI:
     
     def get_video_info(self, video_path):
         """获取视频元数据"""
+        # 调试输出
+        self.log(f"\n【调试】获取元数据")
+        self.log(f"  文件路径：{video_path}")
+        self.log(f"  文件存在：{os.path.exists(video_path)}")
+        self.log(f"  ffprobe 命令：{FFPROBE}")
+        
         cmd = [
-            FFMPEG, '-v', 'error',
+            FFPROBE, '-v', 'error',
             '-show_entries', 'stream=width,height,duration,r_frame_rate,codec_name',
             '-show_entries', 'format=filename,size',
             '-of', 'json',
