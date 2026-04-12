@@ -246,15 +246,60 @@ class IngestHelperGUI:
             FFPROBE, '-v', 'error',
             '-show_entries', 'stream=width,height,duration,r_frame_rate,codec_name',
             '-show_entries', 'format=filename,size',
-            '-of', 'json',
+            '-print_format', 'json',
             video_path
         ]
+        self.log(f"  完整命令：{' '.join(cmd)}")
+        
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            data = json.loads(result.stdout)
+            # 关键修复：必须使用 stdout=subprocess.PIPE 或 capture_output=True
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            
+            # 调试输出
+            self.log(f"  返回码：{result.returncode}")
+            self.log(f"  stdout 类型：{type(result.stdout)}")
+            self.log(f"  stdout 长度：{len(result.stdout) if result.stdout else 0}")
+            self.log(f"  stderr 长度：{len(result.stderr) if result.stderr else 0}")
+            
+            if result.stdout:
+                self.log(f"  stdout 前 500 字符：{result.stdout[:500]}")
+            if result.stderr:
+                self.log(f"  stderr 前 500 字符：{result.stderr[:500]}")
+            
+            # 检查 stdout 是否为空
+            if not result.stdout or not result.stdout.strip():
+                self.log(f"  ❌ stdout 为空，ffprobe 可能失败")
+                if result.stderr:
+                    self.log(f"  错误信息：{result.stderr}")
+                return None
+            
+            # 解析 JSON
+            self.log(f"  尝试解析 JSON...")
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError as je:
+                self.log(f"  ❌ JSON 解析失败：{je}")
+                self.log(f"  原始 stdout: {result.stdout[:200]}")
+                return None
+            
+            self.log(f"  ✅ JSON 解析成功")
+            
+            # 提取数据
+            if not data.get('streams') or not data.get('format'):
+                self.log(f"  ❌ JSON 结构异常：缺少 streams 或 format")
+                return None
+            
             stream = data.get('streams', [{}])[0]
             fmt = data.get('format', {})
-            return {
+            
+            info = {
                 'width': stream.get('width', 0),
                 'height': stream.get('height', 0),
                 'duration': float(stream.get('duration', 0)),
@@ -262,8 +307,14 @@ class IngestHelperGUI:
                 'codec': stream.get('codec_name', 'unknown'),
                 'size': int(fmt.get('size', 0)),
             }
+            
+            self.log(f"  ✅ 元数据：{info['width']}x{info['height']} {info['duration']:.1f}s {info['size']/1024/1024:.1f}MB")
+            return info
+            
         except Exception as e:
-            self.log(f"  获取元数据失败：{os.path.basename(video_path)} - {e}")
+            self.log(f"  ❌ 异常：{type(e).__name__}: {e}")
+            import traceback
+            self.log(f"  堆栈：{traceback.format_exc()}")
             return None
     
     def transcode_all(self):
