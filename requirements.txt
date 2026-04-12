@@ -1,0 +1,21 @@
+# 视频项目生产环境依赖
+# 安装：pip install -r requirements.txt
+
+# Web 框架
+Flask>=3.0.0
+Flask-CORS>=4.0.0
+
+# 环境变量管理
+python-dotenv>=1.0.0
+
+# TTS 引擎
+edge-tts>=6.1.0
+
+# TOS SDK（火山引擎对象存储）
+tos>=2.8.0
+
+# 工具库
+requests>=2.31.0
+
+# 可选依赖
+# ffmpeg-python>=0.2.0  # FFmpeg Python 绑定（如需要程序化调用）

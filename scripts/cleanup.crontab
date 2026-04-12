@@ -1,0 +1,4 @@
+# 视频项目本地清理定时任务
+# 每天凌晨 2 点执行清理
+
+0 2 * * * cd /home/admin/.openclaw/workspace/video-tool && /home/admin/.openclaw/workspace/.venv/bin/python scripts/cleanup_local.py >> logs/cleanup.log 2>&1

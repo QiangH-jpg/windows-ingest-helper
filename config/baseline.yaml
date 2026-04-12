@@ -1,0 +1,46 @@
+# baseline.yaml - 主链稳定基线配置
+# 修改此文件前必须经过审批
+# 上次锁定时间：2026-04-08 21:50
+
+# ============================================
+# 功能开关
+# ============================================
+ENABLE_V2: true              # V2 语义选片
+ENABLE_V3_EXTEND: true       # V3 自动补镜头
+ENABLE_DYNAMIC_DURATION: false  # 动态时长分配（未实现）
+ENABLE_RHYTHM_OPT: true     # 节奏优化（未实现）
+
+# ============================================
+# 时长参数
+# ============================================
+CLIP_DURATION: 3.0           # 固定镜头时长（秒）
+BUFFER_SECONDS: 0.1          # 视频必须长于音频的缓冲
+
+# ============================================
+# V5 门禁阈值
+# ============================================
+MIN_CLIP_DURATION: 1.5       # 最小 clip 时长
+SUBTITLE_MATCH_RATE: 0.90    # 字幕匹配率阈值
+VIDEO_AUDIO_MAX_DIFF: 0.5    # 视频流短于音频最大容差
+MAX_TAIL_SILENCE: 3.0        # 最大静音拖尾
+MIN_VIDEO_DURATION: 20       # 最小视频时长
+MAX_VIDEO_DURATION: 180      # 最大视频时长
+MIN_FILE_SIZE_MB: 5          # 最小文件大小
+
+# ============================================
+# 冻结模块（禁止直接修改）
+# ============================================
+FROZEN_MODULES:
+  - v1_materials/*
+  - v3_timeline/clip_extractor.py
+  - v4_render/*
+  - v5_gate/*
+
+# ============================================
+# 可修改模块（通过 feature flag 控制）
+# ============================================
+MUTABLE_MODULES:
+  - v2_semantic/*
+  - v3_timeline/timeline_orchestrator.py
+  - scripts/run_production.py
+  - config/*

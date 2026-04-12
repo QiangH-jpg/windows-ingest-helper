@@ -1,0 +1,27 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8088
+  },
+  "storage": {
+    "mode": "local",
+    "uploads_dir": "/home/admin/.openclaw/workspace/video-tool/uploads",
+    "workdir": "/home/admin/.openclaw/workspace/video-tool/workdir",
+    "outputs_dir": "/home/admin/.openclaw/workspace/video-tool/outputs"
+  },
+  "video": {
+    "ffmpeg_path": "/home/linuxbrew/.linuxbrew/bin/ffmpeg",
+    "target_duration_sec": 30,
+    "min_clip_sec": 3,
+    "max_clip_sec": 8
+  },
+  "tts": {
+    "provider": "edge",
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": "+0%"
+  },
+  "logs": {
+    "dir": "/home/admin/.openclaw/workspace/video-tool/logs",
+    "level": "INFO"
+  }
+}

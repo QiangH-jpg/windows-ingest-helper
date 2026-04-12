@@ -1,0 +1,13 @@
+{
+  "id": "d33f43f1-1a19-4c92-af56-fef53272c87b",
+  "timestamp": "2026-04-08T19:55:06.376116",
+  "status": "rejected",
+  "mode": "semantic",
+  "materials_count": 15,
+  "timeline_clips_count": 10,
+  "audio_duration": 37.488,
+  "clip_total_duration": 30.799999999999997,
+  "output_path": "/home/admin/.openclaw/workspace/video-tool/outputs/raw/candidate.mp4",
+  "result_path": "/home/admin/.openclaw/workspace/video-tool/data/d33f43f1-1a19-4c92-af56-fef53272c87b_rejection_report.json",
+  "passed": false
+}

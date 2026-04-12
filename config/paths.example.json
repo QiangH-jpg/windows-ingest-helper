@@ -1,0 +1,22 @@
+# 视频项目路径配置模板
+# 复制为 paths.json 后修改
+
+{
+  "_comment": "路径配置 - 所有路径使用相对路径或环境变量",
+  
+  "base_dir": "${VIDEO_TOOL_BASE_DIR}",
+  
+  "uploads": "${base_dir}/uploads",
+  "workdir": "${base_dir}/workdir",
+  "outputs": "${base_dir}/outputs",
+  "cache": "${base_dir}/cache",
+  "processed": "${base_dir}/processed_videos",
+  "logs": "${base_dir}/logs",
+  "archive": "${base_dir}/archive",
+  "samples": "${base_dir}/samples",
+  "baselines": "${base_dir}/baselines",
+  
+  "config_dir": "${base_dir}/config",
+  "scripts_dir": "${base_dir}/scripts",
+  "deploy_dir": "${base_dir}/deploy"
+}

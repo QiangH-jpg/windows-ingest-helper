@@ -1,0 +1,65 @@
+{
+  "_comment": "视频项目配置文件模板 - 复制为 config.json 后修改",
+  "_version": "1.0.0",
+  "_description": "独立部署配置，不依赖 OpenClaw 路径",
+  
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8088,
+    "debug": false
+  },
+  
+  "storage": {
+    "mode": "local",
+    "uploads_dir": "./uploads",
+    "workdir": "./workdir",
+    "outputs_dir": "./outputs",
+    "cache_dir": "./cache",
+    "processed_dir": "./processed_videos"
+  },
+  
+  "video": {
+    "ffmpeg_path": "/usr/local/bin/ffmpeg",
+    "ffprobe_path": "/usr/local/bin/ffprobe",
+    "target_duration_sec": 30,
+    "min_clip_sec": 3,
+    "max_clip_sec": 8,
+    "output_width": 1280,
+    "output_height": 720,
+    "output_fps": 30,
+    "output_crf": 23
+  },
+  
+  "tts": {
+    "provider": "edge",
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": "+0%",
+    "volume": "+0%"
+  },
+  
+  "tos": {
+    "enabled": true,
+    "ak": "${TOS_AK}",
+    "sk": "${TOS_SK}",
+    "bucket": "e23-video",
+    "region": "cn-beijing",
+    "endpoint_template": "tos-{region}.volces.com",
+    "url_expires_sec": 604800
+  },
+  
+  "cleanup": {
+    "enabled": true,
+    "schedule": "0 2 * * *",
+    "max_processed_size_mb": 500,
+    "temp_retention_hours": 24,
+    "failed_retention_days": 7
+  },
+  
+  "logs": {
+    "dir": "./logs",
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "max_size_mb": 100,
+    "backup_count": 10
+  }
+}

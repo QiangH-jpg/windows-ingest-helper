@@ -1,0 +1,9 @@
+{
+  "task_id": "acddbfd9-f27b-4ec4-99fe-58f064df0c79",
+  "timestamp": "20260408_174643",
+  "candidate_path": "/home/admin/.openclaw/workspace/video-tool/outputs/raw/candidate.mp4",
+  "issues": [
+    "视频时长检查失败：视频时长152.4s 超出合理范围 (20-90 秒)"
+  ],
+  "status": "rejected"
+}

@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""
+修复：连续视频 + 中文字幕
+优化版：每秒10帧处理 + 插值到59.94fps
+"""
+import os
+import sys
+import json
+import uuid
+import subprocess
+import asyncio
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from core.storage import storage
+from pipeline import processor, video_analyzer
+from pipeline.tts_provider import generate_tts, create_subtitle_srt_from_meta
+from PIL import Image, ImageDraw, ImageFont
+
+TASK_ID = str(uuid.uuid4())
+print(f"New task_id: {TASK_ID}")
+
+CLIPS = [
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_0.mp4.clip_0.mp4', 'duration': 5, 'source_index': 0},
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_1.mp4.clip_0.mp4', 'duration': 5, 'source_index': 1},
+]
+TARGET_DURATION = 15
+
+for clip in CLIPS:
+    if not os.path.exists(clip['path']):
+        print(f"ERROR: {clip['path']}")
+        sys.exit(1)
+
+print(f"Clips: {len(CLIPS)} from sources [0, 1]")
+
+# TTS
+print("\n=== Generate TTS ===")
+script = "欢迎观看新闻短视频。这是由系统自动生成的成片，使用了多段真实素材拼接而成。"
+tts_path = os.path.join(storage.workdir, f"{TASK_ID}_tts.mp3")
+tts_meta_path = os.path.join(storage.workdir, f"{TASK_ID}_tts_meta.json")
+tts_meta = asyncio.run(generate_tts(script, tts_path, tts_meta_path))
+print(f"TTS: {tts_path}, {tts_meta.get('total_duration', 'N/A')}s")
+
+# SRT
+srt_path = os.path.join(storage.workdir, f"{TASK_ID}.srt")
+create_subtitle_srt_from_meta(tts_meta, srt_path)
+
+def parse_srt(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    subtitles = []
+    for block in content.strip().split('\n\n'):
+        lines = block.strip().split('\n')
+        if len(lines) < 3:
+            continue
+        start, end = lines[1].split(' --> ')
+        subtitles.append({
+            'start': parse_time(start),
+            'end': parse_time(end),
+            'text': '\n'.join(lines[2:])
+        })
+    return subtitles
+
+def parse_time(t):
+    t = t.replace(',', '.')
+    h, m, s = t.split(':')
+    return int(h)*3600 + int(m)*60 + float(s)
+
+subtitles = parse_srt(srt_path)
+print(f"Subtitles: {len(subtitles)} entries")
+
+# 中文字体
+print("\n=== Load Chinese font ===")
+font_path = '/usr/share/fonts/wqy-microhei/wqy-microhei.ttc'
+font_size = 56
+font = ImageFont.truetype(font_path, font_size)
+print(f"Loaded: {font_path}")
+
+# Step 1: concat + TTS (保持59.94fps)
+print("\n=== Step 1: Concat clips + TTS (59.94fps) ===")
+concat_file = os.path.join(storage.outputs_dir, f"{TASK_ID}_concat.txt")
+with open(concat_file, 'w') as f:
+    for clip in CLIPS:
+        f.write(f"file '{clip['path']}'\n")
+
+temp_video = os.path.join(storage.workdir, f"{TASK_ID}_temp.mp4")
+cmd = [
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-f', 'concat', '-safe', '0', '-i', concat_file,
+    '-i', tts_path,
+    '-map', '0:v:0',
+    '-map', '1:a:0',
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-af', 'volume=2.0',
+    '-r', '59.94',
+    '-t', str(TARGET_DURATION),
+    temp_video
+]
+subprocess.run(cmd, check=True, capture_output=True)
+print(f"Temp video: {temp_video}")
+
+info = video_analyzer.get_video_info(temp_video)
+width = info.get('width', 1920)
+height = info.get('height', 1080)
+duration = info.get('duration', 10)
+print(f"Video: {width}x{height}, {duration}s, 59.94fps")
+
+# Step 2: 提取帧（10fps - 足够密度保证连续性）
+print("\n=== Step 2: Extract frames (10fps for continuous motion) ===")
+frame_dir = os.path.join(storage.workdir, f"{TASK_ID}_frames")
+os.makedirs(frame_dir, exist_ok=True)
+
+# 提取10fps的帧（比之前的1fps密10倍，保证连续感）
+subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y', '-i', temp_video,
+    '-vf', 'fps=10',
+    f'{frame_dir}/frame_%05d.png'
+], capture_output=True)
+
+frame_files = sorted([f for f in os.listdir(frame_dir) if f.endswith('.png')])
+total_frames = len(frame_files)
+print(f"Extracted {total_frames} frames ({total_frames/duration:.1f}fps)")
+
+# Step 3: 在每帧烧字幕
+print("\n=== Step 3: Burn subtitles on frames ===")
+for i, frame_file in enumerate(frame_files):
+    frame_path = os.path.join(frame_dir, frame_file)
+    
+    # 时间戳
+    frame_idx = int(frame_file.replace('frame_', '').replace('.png', ''))
+    timestamp = frame_idx / 10.0  # 10fps
+    
+    # 找字幕
+    current_text = ""
+    for sub in subtitles:
+        if sub['start'] <= timestamp <= sub['end']:
+            current_text = sub['text']
+            break
+    
+    if current_text:
+        img = Image.open(frame_path).convert('RGB')
+        draw = ImageDraw.Draw(img)
+        
+        # 位置
+        try:
+            left, top, right, bottom = draw.textbbox((0, 0), current_text, font=font)
+            text_w, text_h = right - left, bottom - top
+        except:
+            text_w, text_h = 800, 70
+        
+        x = (width - text_w) // 2
+        y = height - text_h - 100
+        
+        # 黑边白字
+        for ox in range(-4, 5):
+            for oy in range(-4, 5):
+                if ox != 0 or oy != 0:
+                    draw.text((x+ox, y+oy), current_text, font=font, fill='black')
+        draw.text((x, y), current_text, font=font, fill='white')
+        
+        img.save(frame_path, 'PNG', quality=90)
+    
+    if (i+1) % 20 == 0:
+        print(f"  Processed {i+1}/{total_frames}")
+
+print(f"Processed {total_frames} frames")
+
+# Step 4: 重新编码（插值到59.94fps）
+print("\n=== Step 4: Re-encode (interpolate to 59.94fps) ===")
+output_path = storage.get_output_path(TASK_ID)
+
+input_list = os.path.join(frame_dir, 'input.txt')
+with open(input_list, 'w') as f:
+    for frame_file in frame_files:
+        f.write(f"file '{frame_dir}/{frame_file}'\n")
+        f.write(f"duration 0.1\n")  # 10fps = 0.1s per frame
+    if frame_files:
+        f.write(f"file '{frame_dir}/{frame_files[-1]}'\n")
+
+# 用fps filter插值到59.94fps
+cmd = [
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-f', 'concat', '-safe', '0', '-i', input_list,
+    '-i', tts_path,
+    '-map', '0:v:0',
+    '-map', '1:a:0',
+    '-vf', 'fps=59.94',  # 关键：插值到59.94fps
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-af', 'volume=2.0',
+    '-shortest',
+    output_path
+]
+result = subprocess.run(cmd, capture_output=True, text=True)
+if result.returncode != 0:
+    print(f"FFmpeg error: {result.stderr[-500:]}")
+    raise Exception(f"Re-encode failed: {result.returncode}")
+
+print(f"Output: {output_path}")
+
+# 验证
+print("\n=== Verify ===")
+info = video_analyzer.get_video_info(output_path)
+print(f"Duration: {info.get('duration', 'N/A')}s")
+print(f"Resolution: {info.get('width', 'N/A')}x{info.get('height', 'N/A')}")
+print(f"Has audio: {info.get('has_audio', False)}")
+
+# 帧率
+ffprobe_out = subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffprobe', '-hide_banner', 
+    '-select_streams', 'v:0', '-show_entries', 'r_frame_rate', '-of', 'csv=p=0',
+    output_path
+], capture_output=True, text=True)
+actual_fps = ffprobe_out.stdout.strip()
+print(f"Frame rate: {actual_fps}")
+
+# 抽帧验证
+print("\n=== Extract verification frames (1fps) ===")
+verify_dir = f"/tmp/final_motion_check_{TASK_ID}"
+os.makedirs(verify_dir, exist_ok=True)
+subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y', '-i', output_path,
+    '-vf', 'fps=1', f'{verify_dir}/frame_%03d.jpg'
+], capture_output=True)
+
+verify_frames = sorted([f for f in os.listdir(verify_dir) if f.endswith('.jpg')])
+print(f"Extracted {len(verify_frames)} verification frames")
+
+# 保存任务
+os.makedirs(os.path.join(storage.workdir, 'tasks'), exist_ok=True)
+task_info = {
+    'id': TASK_ID,
+    'status': 'completed',
+    'output_path': output_path,
+    'progress': 100,
+    'created_at': subprocess.run(['date', '+%Y-%m-%dT%H:%M:%S'], capture_output=True, text=True).stdout.strip()
+}
+with open(os.path.join(storage.workdir, 'tasks', f'{TASK_ID}.json'), 'w') as f:
+    json.dump(task_info, f, ensure_ascii=False, indent=2)
+
+size = os.path.getsize(output_path)
+
+print("\n" + "="*60)
+print("SUCCESS")
+print("="*60)
+print(f"task_id: {TASK_ID}")
+print(f"output: {output_path}")
+print(f"size: {size:,} bytes ({size/1024/1024:.1f}MB)")
+print(f"duration: {info.get('duration', 'N/A')}s")
+print(f"frame_rate: {actual_fps}")
+print(f"sources: [0, 1] (2 sources)")
+print(f"verify_frames: {verify_dir}")
+print(f"download: http://47.93.194.154:8088/api/download/{TASK_ID}")

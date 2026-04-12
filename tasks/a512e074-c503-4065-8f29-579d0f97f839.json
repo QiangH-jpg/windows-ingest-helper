@@ -1,0 +1,12 @@
+{
+  "id": "a512e074-c503-4065-8f29-579d0f97f839",
+  "timestamp": "20260408_143048",
+  "status": "approved",
+  "script": "3 月 26 日，济南市人社局在美团服务中心开展\"人社服务大篷车\"活动。\n\n活动以\"走进奔跑者——保障与你同行\"为主题，把人社服务送到外卖骑手等一线劳动者。\n\n现场通过发放资料、面对面讲解，向小哥介绍社保参保、权益保障等政策。\n\n还有互动环节，让大家在轻松氛围中了解政策。\n\n济南市人社局持续推动服务走近新就业形态劳动者，打通保障\"最后一公里\"。",
+  "materials_count": 19,
+  "timeline_clips_count": 13,
+  "audio_duration": 37.488,
+  "candidate_path": "/home/admin/.openclaw/workspace/video-tool/outputs/raw/candidate.mp4",
+  "result_path": "/home/admin/.openclaw/workspace/video-tool/outputs/approved/a512e074-c503-4065-8f29-579d0f97f839_approved.mp4",
+  "passed": true
+}

@@ -1,0 +1,13 @@
+{
+  "id": "f00f126c-ff89-43f2-a11c-2096500d09e1",
+  "status": "completed",
+  "rule": "semantic_v15",
+  "video_duration_sec": 33.79,
+  "tts_duration_sec": 33.82,
+  "duration_diff_sec": 0.03,
+  "output_path": "/home/admin/.openclaw/workspace/video-tool/outputs/f00f126c-ff89-43f2-a11c-2096500d09e1.mp4",
+  "output_size_mb": 11.23,
+  "clip_count": 10,
+  "action_match_rate": 1.0,
+  "created_at": "2026-04-08T12:03:00+08:00"
+}

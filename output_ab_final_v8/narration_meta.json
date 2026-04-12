@@ -1,0 +1,82 @@
+{
+  "provider": "edge_tts",
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "rate": "+0%",
+  "input_text": "3 月 26 日，济南市人社局人社服务大篷车活动在美团服务中心开展。活动以走进奔跑者保障与你同行为主题，聚焦外卖骑手等新就业形态劳动者。工作人员和志愿者通过发放资料、面对面讲解，向外卖小哥介绍社保参保、权益保障政策。现场设置互动环节，让大家在轻松氛围中了解政策、增强维权意识。济南市人社局持续推动人社服务走近新就业形态劳动者，打通服务保障最后一公里。",
+  "sentence_count": 9,
+  "total_duration": 41.04,
+  "sentences": [
+    {
+      "index": 0,
+      "text": "3 月 26 日",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_0.mp3",
+      "duration": 1.872,
+      "start_time": 0.0,
+      "end_time": 1.872
+    },
+    {
+      "index": 1,
+      "text": "济南市人社局人社服务大篷车活动在美团服务中心开展",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_1.mp3",
+      "duration": 5.712,
+      "start_time": 1.872,
+      "end_time": 7.584
+    },
+    {
+      "index": 2,
+      "text": "活动以走进奔跑者保障与你同行为主题",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_2.mp3",
+      "duration": 4.464,
+      "start_time": 7.584,
+      "end_time": 12.048
+    },
+    {
+      "index": 3,
+      "text": "聚焦外卖骑手等新就业形态劳动者",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_3.mp3",
+      "duration": 3.84,
+      "start_time": 12.048,
+      "end_time": 15.888
+    },
+    {
+      "index": 4,
+      "text": "工作人员和志愿者通过发放资料、面对面讲解",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_4.mp3",
+      "duration": 4.92,
+      "start_time": 15.888,
+      "end_time": 20.808
+    },
+    {
+      "index": 5,
+      "text": "向外卖小哥介绍社保参保、权益保障政策",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_5.mp3",
+      "duration": 4.632,
+      "start_time": 20.808,
+      "end_time": 25.44
+    },
+    {
+      "index": 6,
+      "text": "现场设置互动环节，让大家在轻松氛围中了解政策、增强维权意识",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_6.mp3",
+      "duration": 7.032,
+      "start_time": 25.44,
+      "end_time": 32.472
+    },
+    {
+      "index": 7,
+      "text": "济南市人社局持续推动人社服务走近新就业形态劳动者",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_7.mp3",
+      "duration": 5.832,
+      "start_time": 32.472,
+      "end_time": 38.304
+    },
+    {
+      "index": 8,
+      "text": "打通服务保障最后一公里",
+      "audio_path": "/tmp/video-tool-test-48975/output_ab_final_v8/narration.mp3.chunk_8.mp3",
+      "duration": 2.736,
+      "start_time": 38.304,
+      "end_time": 41.04
+    }
+  ]
+}

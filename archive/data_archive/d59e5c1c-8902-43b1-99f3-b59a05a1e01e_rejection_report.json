@@ -1,0 +1,41 @@
+{
+  "task_id": "d59e5c1c-8902-43b1-99f3-b59a05a1e01e",
+  "timestamp": "2026-04-08T22:22:35.090319",
+  "candidate_path": "/home/admin/.openclaw/workspace/video-tool/outputs/raw/candidate.mp4",
+  "issues": [
+    "[clip] clip_13.mp4: 0.92s < 1.5s"
+  ],
+  "results": {
+    "clip_check": {
+      "passed": false,
+      "issues": [
+        "clip_13.mp4: 0.92s < 1.5s"
+      ],
+      "total_clips": 14,
+      "min_found": 0.92
+    },
+    "subtitle_check": {
+      "passed": true,
+      "subtitle_text": "3月26日济南市人社局在美团服务中心开展\"人社服务大篷车\"活动活动以\"走进奔跑者——保障与你同行\"为主题把人社服务送到外卖骑手等一线劳动者现场通过发放资料、面对面讲解向小哥介绍社保参保、权益保障等政策还有互动环节让大家在轻松氛围中了解政策济南市人社局持续推动服务走近新就业形态劳动者打通保障\"最后一公里\"",
+      "match_rate": 1.0,
+      "issues": []
+    },
+    "ending_check": {
+      "passed": true,
+      "container_duration": 37.88,
+      "video_stream_duration": 37.84,
+      "audio_duration": 37.488,
+      "diff": 0.35200000000000387,
+      "issues": []
+    },
+    "duration_check": {
+      "passed": true,
+      "duration": 37.88
+    },
+    "size_check": {
+      "passed": true,
+      "size_mb": 13.697882652282715
+    }
+  },
+  "status": "rejected"
+}

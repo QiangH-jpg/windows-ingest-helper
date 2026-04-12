@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Audio fix verification - test TTS audio is now used"""
+import os
+import sys
+import json
+import uuid
+import subprocess
+import asyncio
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from core.storage import storage
+from pipeline import processor, video_analyzer
+from pipeline.tts_provider import generate_tts, create_subtitle_srt_from_meta
+
+TASK_ID = str(uuid.uuid4())
+print(f"New task_id: {TASK_ID}")
+
+# Reuse clips from previous task
+CLIPS = [
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_0.mp4.clip_0.mp4', 'duration': 5, 'source_index': 0},
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_1.mp4.clip_0.mp4', 'duration': 5, 'source_index': 1},
+]
+TARGET_DURATION = 15
+
+print(f"Clips: {len(CLIPS)} from sources [0, 1]")
+
+# Generate TTS
+print("\n=== Generate TTS ===")
+script = "欢迎观看新闻短视频。这是由系统自动生成的成片，使用了多段真实素材拼接而成。"
+tts_path = os.path.join(storage.workdir, f"{TASK_ID}_tts.mp3")
+tts_meta_path = os.path.join(storage.workdir, f"{TASK_ID}_tts_meta.json")
+tts_meta = asyncio.run(generate_tts(script, tts_path, tts_meta_path))
+print(f"TTS: {tts_path}, {tts_meta.get('total_duration', 'N/A')}s")
+
+# Create SRT
+srt_path = os.path.join(storage.workdir, f"{TASK_ID}.srt")
+create_subtitle_srt_from_meta(tts_meta, srt_path)
+
+# Assemble using fixed processor.assemble_video (with -map 1:a:0)
+print("\n=== Assemble video (with fixed audio mapping) ===")
+output_path = storage.get_output_path(TASK_ID)
+processor.assemble_video(CLIPS, tts_path, srt_path, output_path, TARGET_DURATION, keep_concat=True)
+print(f"Output: {output_path}")
+
+# Verify
+print("\n=== Verify ===")
+info = video_analyzer.get_video_info(output_path)
+print(f"Duration: {info.get('duration', 'N/A')}s")
+print(f"Resolution: {info.get('width', 'N/A')}x{info.get('height', 'N/A')}")
+print(f"Has audio: {info.get('has_audio', False)}")
+
+# Extract audio and check volume
+print("\n=== Audio check ===")
+audio_wav = '/tmp/audio_check.wav'
+subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y', '-i', output_path,
+    '-t', '5', '-vn', '-acodec', 'pcm_s16le', audio_wav
+], capture_output=True)
+
+result = subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-i', audio_wav, '-af', 'volumedetect', '-f', 'null', '/dev/null'
+], capture_output=True, text=True)
+for line in result.stderr.split('\n'):
+    if 'mean_volume' in line or 'max_volume' in line:
+        print(line)
+
+# Extract frames
+print("\n=== Extract frames ===")
+frame_dir = f"/tmp/final_check_{TASK_ID}"
+os.makedirs(frame_dir, exist_ok=True)
+subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y', '-i', output_path,
+    '-vf', 'fps=1', f'{frame_dir}/frame_%03d.jpg'
+], capture_output=True)
+frames = sorted([f for f in os.listdir(frame_dir) if f.endswith('.jpg')])
+print(f"Frames: {len(frames)}")
+
+# Get file size
+size = os.path.getsize(output_path)
+print(f"\n=== RESULT ===")
+print(f"task_id: {TASK_ID}")
+print(f"output: {output_path}")
+print(f"size: {size:,} bytes ({size/1024/1024:.1f}MB)")
+print(f"frames: {frame_dir}")
+print(f"sources: [0, 1] (2 sources)")
+print(f"duration: {info.get('duration', 'N/A')}s")

@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Final fix - burn subtitles using PIL + re-encode"""
+import os
+import sys
+import json
+import uuid
+import subprocess
+import asyncio
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from core.storage import storage
+from pipeline import processor, video_analyzer
+from pipeline.tts_provider import generate_tts, create_subtitle_srt_from_meta
+from PIL import Image, ImageDraw, ImageFont
+
+TASK_ID = str(uuid.uuid4())
+print(f"New task_id: {TASK_ID}")
+
+# Reuse clips from previous task
+CLIPS = [
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_0.mp4.clip_0.mp4', 'duration': 5, 'source_index': 0},
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_1.mp4.clip_0.mp4', 'duration': 5, 'source_index': 1},
+]
+TARGET_DURATION = 15
+
+print(f"Clips: {len(CLIPS)} from sources [0, 1]")
+
+# Generate TTS
+print("\n=== Generate TTS ===")
+script = "欢迎观看新闻短视频。这是由系统自动生成的成片，使用了多段真实素材拼接而成。"
+tts_path = os.path.join(storage.workdir, f"{TASK_ID}_tts.mp3")
+tts_meta_path = os.path.join(storage.workdir, f"{TASK_ID}_tts_meta.json")
+tts_meta = asyncio.run(generate_tts(script, tts_path, tts_meta_path))
+print(f"TTS: {tts_path}, {tts_meta.get('total_duration', 'N/A')}s")
+
+# Create SRT and parse
+srt_path = os.path.join(storage.workdir, f"{TASK_ID}.srt")
+create_subtitle_srt_from_meta(tts_meta, srt_path)
+
+def parse_srt(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    subtitles = []
+    blocks = content.strip().split('\n\n')
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) < 3:
+            continue
+        timing = lines[1]
+        start, end = timing.split(' --> ')
+        start_sec = parse_time(start)
+        end_sec = parse_time(end)
+        text = '\n'.join(lines[2:])
+        subtitles.append({'start': start_sec, 'end': end_sec, 'text': text})
+    return subtitles
+
+def parse_time(t):
+    t = t.replace(',', '.')
+    h, m, s = t.split(':')
+    return int(h)*3600 + int(m)*60 + float(s)
+
+subtitles = parse_srt(srt_path)
+print(f"Subtitles: {len(subtitles)} entries")
+
+# First: concat clips to temp video
+print("\n=== Step 1: Concat clips + TTS (no subs) ===")
+concat_file = os.path.join(storage.outputs_dir, f"{TASK_ID}_concat.txt")
+with open(concat_file, 'w') as f:
+    for clip in CLIPS:
+        f.write(f"file '{clip['path']}'\n")
+
+temp_no_sub = os.path.join(storage.workdir, f"{TASK_ID}_nosub.mp4")
+cmd = [
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-f', 'concat', '-safe', '0', '-i', concat_file,
+    '-i', tts_path,
+    '-map', '0:v:0',
+    '-map', '1:a:0',
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-af', 'volume=2.0',
+    '-an', '-sn',
+    '-t', str(TARGET_DURATION),
+    temp_no_sub
+]
+subprocess.run(cmd, check=True, capture_output=True)
+print(f"Temp video: {temp_no_sub}")
+
+# Get video info
+info = video_analyzer.get_video_info(temp_no_sub)
+width = info.get('width', 1920)
+height = info.get('height', 1080)
+print(f"Video: {width}x{height}")
+
+# Second: extract frames
+print("\n=== Step 2: Extract frames ===")
+frame_dir = os.path.join(storage.workdir, f"{TASK_ID}_frames")
+os.makedirs(frame_dir, exist_ok=True)
+subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-i', temp_no_sub,
+    '-vf', 'fps=1',
+    f'{frame_dir}/frame_%04d.jpg'
+], check=True, capture_output=True)
+
+frame_files = sorted([f for f in os.listdir(frame_dir) if f.endswith('.jpg')])
+print(f"Extracted {len(frame_files)} frames")
+
+# Third: burn subtitles with PIL
+print("\n=== Step 3: Burn subtitles with PIL ===")
+
+# Find a font
+font_paths = [
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+]
+font = None
+for fp in font_paths:
+    if os.path.exists(fp):
+        try:
+            font = ImageFont.truetype(fp, 48)
+            print(f"Using font: {fp}")
+            break
+        except:
+            continue
+
+if not font:
+    font = ImageFont.load_default()
+    print("Using default font")
+
+for frame_file in frame_files:
+    frame_path = os.path.join(frame_dir, frame_file)
+    frame_num = int(frame_file.replace('frame_', '').replace('.jpg', ''))
+    timestamp = frame_num - 1  # 0-indexed
+    
+    # Find subtitle for this timestamp
+    current_text = ""
+    for sub in subtitles:
+        if sub['start'] <= timestamp <= sub['end']:
+            current_text = sub['text']
+            break
+    
+    if current_text:
+        # Add subtitle to image
+        img = Image.open(frame_path).convert('RGB')
+        draw = ImageDraw.Draw(img)
+        
+        # Calculate text size
+        try:
+            left, top, right, bottom = draw.textbbox((0, 0), current_text, font=font)
+            text_w, text_h = right - left, bottom - top
+        except:
+            text_w, text_h = 800, 60
+        
+        # Position: bottom center
+        x = (width - text_w) // 2
+        y = height - text_h - 80
+        
+        # Draw text with black outline and white fill
+        for ox in range(-3, 4):
+            for oy in range(-3, 4):
+                if ox != 0 or oy != 0:
+                    draw.text((x+ox, y+oy), current_text, font=font, fill='black')
+        draw.text((x, y), current_text, font=font, fill='white')
+        
+        img.save(frame_path, quality=95)
+        print(f"  {frame_file}: burned '{current_text[:20]}...'")
+
+# Fourth: re-encode with burned frames + TTS audio
+print("\n=== Step 4: Re-encode with burned frames + TTS ===")
+output_path = storage.get_output_path(TASK_ID)
+
+# Create pattern file
+pattern_file = os.path.join(frame_dir, 'input.txt')
+with open(pattern_file, 'w') as f:
+    for i, frame_file in enumerate(frame_files):
+        f.write(f"file '{frame_dir}/{frame_file}'\n")
+        f.write(f"duration 1\n")
+    if frame_files:
+        f.write(f"file '{frame_dir}/{frame_files[-1]}'\n")
+
+# Use concat demuxer for images
+cmd = [
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-f', 'concat', '-safe', '0', '-i', pattern_file,
+    '-i', tts_path,
+    '-map', '0:v:0',
+    '-map', '1:a:0',
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-af', 'volume=2.0',
+    '-shortest',
+    output_path
+]
+result = subprocess.run(cmd, capture_output=True, text=True)
+if result.returncode != 0:
+    print(f"FFmpeg error: {result.stderr[-500:]}")
+    raise Exception(f"FFmpeg failed: {result.returncode}")
+
+print(f"Output: {output_path}")
+
+# Verify
+print("\n=== Verify ===")
+info = video_analyzer.get_video_info(output_path)
+print(f"Duration: {info.get('duration', 'N/A')}s")
+print(f"Resolution: {info.get('width', 'N/A')}x{info.get('height', 'N/A')}")
+print(f"Has audio: {info.get('has_audio', False)}")
+
+# Check streams - should NOT have subtitle stream now
+ffprobe_out = subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffprobe', '-hide_banner', '-show_streams', output_path
+], capture_output=True, text=True)
+has_subtitle_stream = 'codec_type=subtitle' in ffprobe_out.stdout
+print(f"Has subtitle stream: {has_subtitle_stream} (should be False - burned in)")
+
+# Extract frames to verify
+print("\n=== Extract frames for verification ===")
+user_frame_dir = f"/tmp/final_check_{TASK_ID}"
+os.makedirs(user_frame_dir, exist_ok=True)
+subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y', '-i', output_path,
+    '-vf', 'fps=1', f'{user_frame_dir}/frame_%03d.jpg'
+], capture_output=True)
+
+frames = sorted([f for f in os.listdir(user_frame_dir) if f.endswith('.jpg')])
+print(f"Frames: {len(frames)}")
+
+# Save task info for download
+os.makedirs(os.path.join(storage.workdir, 'tasks'), exist_ok=True)
+task_info = {
+    'id': TASK_ID,
+    'status': 'completed',
+    'output_path': output_path,
+    'progress': 100
+}
+with open(os.path.join(storage.workdir, 'tasks', f'{TASK_ID}.json'), 'w') as f:
+    json.dump(task_info, f)
+
+# Get file size
+size = os.path.getsize(output_path)
+
+print("\n" + "="*50)
+print("SUCCESS")
+print("="*50)
+print(f"task_id: {TASK_ID}")
+print(f"output: {output_path}")
+print(f"size: {size:,} bytes ({size/1024/1024:.1f}MB)")
+print(f"duration: {info.get('duration', 'N/A')}s")
+print(f"sources: [0, 1] (2 sources)")
+print(f"frame_dir: {user_frame_dir}")
+print(f"download: http://47.93.194.154:8088/api/download/{TASK_ID}")

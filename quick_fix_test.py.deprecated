@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Quick fix - burn subtitles using Python PIL + ffmpeg"""
+import os
+import sys
+import json
+import uuid
+import subprocess
+import asyncio
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from core.storage import storage
+from pipeline import processor, video_analyzer
+from pipeline.tts_provider import generate_tts, create_subtitle_srt_from_meta
+
+TASK_ID = str(uuid.uuid4())
+print(f"New task_id: {TASK_ID}")
+
+# Reuse clips from previous task
+CLIPS = [
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_0.mp4.clip_0.mp4', 'duration': 5, 'source_index': 0},
+    {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa-7501-4899-8f56-5191b2e16a11_transcoded_1.mp4.clip_0.mp4', 'duration': 5, 'source_index': 1},
+]
+TARGET_DURATION = 15
+
+# Verify clips
+for clip in CLIPS:
+    if not os.path.exists(clip['path']):
+        print(f"ERROR: {clip['path']}")
+        sys.exit(1)
+
+print(f"Clips: {len(CLIPS)} from sources [0, 1]")
+
+# Save timeline
+timeline_path = os.path.join(storage.workdir, f"{TASK_ID}_timeline.json")
+with open(timeline_path, 'w') as f:
+    json.dump({'task_id': TASK_ID, 'sources_used': [0, 1], 'clips': CLIPS}, f, ensure_ascii=False, indent=2)
+
+# Generate TTS
+print("\n=== Generate TTS ===")
+script = "欢迎观看新闻短视频。这是由系统自动生成的成片，使用了多段真实素材拼接而成。"
+tts_path = os.path.join(storage.workdir, f"{TASK_ID}_tts.mp3")
+tts_meta_path = os.path.join(storage.workdir, f"{TASK_ID}_tts_meta.json")
+tts_meta = asyncio.run(generate_tts(script, tts_path, tts_meta_path))
+print(f"TTS: {tts_path}, {tts_meta.get('total_duration', 'N/A')}s")
+
+# Create SRT
+srt_path = os.path.join(storage.workdir, f"{TASK_ID}.srt")
+create_subtitle_srt_from_meta(tts_meta, srt_path)
+
+# Parse SRT
+def parse_srt(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    subtitles = []
+    blocks = content.strip().split('\n\n')
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) < 3:
+            continue
+        timing = lines[1]
+        start, end = timing.split(' --> ')
+        start_sec = parse_time(start)
+        end_sec = parse_time(end)
+        text = '\n'.join(lines[2:])
+        subtitles.append({'start': start_sec, 'end': end_sec, 'text': text})
+    return subtitles
+
+def parse_time(t):
+    t = t.replace(',', '.')
+    h, m, s = t.split(':')
+    return int(h)*3600 + int(m)*60 + float(s)
+
+subtitles = parse_srt(srt_path)
+print(f"Subtitles: {len(subtitles)} entries")
+for s in subtitles:
+    print(f"  {s['start']:.1f}-{s['end']:.1f}: {s['text'][:30]}")
+
+# First: concat clips to temp video (no subtitles)
+print("\n=== Step 1: Concat clips ===")
+concat_file = os.path.join(storage.outputs_dir, f"{TASK_ID}_concat.txt")
+with open(concat_file, 'w') as f:
+    for clip in CLIPS:
+        f.write(f"file '{clip['path']}'\n")
+
+temp_no_audio = os.path.join(storage.workdir, f"{TASK_ID}_noaudio.mp4")
+cmd = [
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-f', 'concat', '-safe', '0', '-i', concat_file,
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-an', '-sn',  # no audio, no subtitle
+    '-t', str(TARGET_DURATION),
+    temp_no_audio
+]
+subprocess.run(cmd, check=True, capture_output=True)
+print(f"Temp video: {temp_no_audio}")
+
+# Second: extract frames, burn subtitles with PIL, re-encode
+print("\n=== Step 2: Extract frames ===")
+frame_dir = os.path.join(storage.workdir, f"{TASK_ID}_frames")
+os.makedirs(frame_dir, exist_ok=True)
+subprocess.run([
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-i', temp_no_audio,
+    '-vf', 'fps=1',
+    f'{frame_dir}/frame_%04d.jpg'
+], check=True, capture_output=True)
+
+frame_files = sorted([f for f in os.listdir(frame_dir) if f.endswith('.jpg')])
+print(f"Extracted {len(frame_files)} frames")
+
+# Burn subtitles using PIL
+print("\n=== Step 3: Burn subtitles with PIL ===")
+from PIL import Image, ImageDraw, ImageFont
+
+# Try to use a font, fallback to default
+font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+if not os.path.exists(font_path):
+    font_path = '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf'
+if not os.path.exists(font_path):
+    font_path = None  # Use default
+
+font_size = 48
+if font_path:
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except:
+        font = ImageFont.load_default()
+else:
+    font = ImageFont.load_default()
+
+for frame_file in frame_files:
+    frame_path = os.path.join(frame_dir, frame_file)
+    
+    # Extract timestamp from filename
+    frame_num = int(frame_file.replace('frame_', '').replace('.jpg', ''))
+    timestamp = frame_num - 1  # 0-indexed
+    
+    # Find subtitle for this timestamp
+    current_text = ""
+    for sub in subtitles:
+        if sub['start'] <= timestamp <= sub['end']:
+            current_text = sub['text']
+            break
+    
+    if current_text:
+        # Add subtitle to image
+        img = Image.open(frame_path).convert('RGB')
+        draw = ImageDraw.Draw(img)
+        
+        # Calculate text size and position
+        try:
+            left, top, right, bottom = draw.textbbox((0, 0), current_text, font=font)
+            text_w, text_h = right - left, bottom - top
+        except:
+            text_w, text_h = 600, 50  # fallback
+        
+        # Position: bottom center
+        img_w, img_h = img.size
+        x = (img_w - text_w) // 2
+        y = img_h - text_h - 60
+        
+        # Draw text with outline (black) and fill (white)
+        outline_range = 3
+        for ox in range(-outline_range, outline_range+1):
+            for oy in range(-outline_range, outline_range+1):
+                draw.text((x+ox, y+oy), current_text, font=font, fill='black')
+        draw.text((x, y), current_text, font=font, fill='white')
+        
+        img.save(frame_path)
+        print(f"  {frame_file}: burned '{current_text[:20]}...'")
+
+# Third: re-encode video with burned-in frames + TTS audio
+print("\n=== Step 4: Re-encode with TTS audio ===")
+output_path = storage.get_output_path(TASK_ID)
+
+# Create pattern file for ffmpeg
+pattern_file = os.path.join(frame_dir, 'input.txt')
+with open(pattern_file, 'w') as f:
+    for frame_file in frame_files:
+        f.write(f"file '{frame_dir}/{frame_file}'\n")
+        f.write(f"duration 1\n")
+    # Last frame needs to be added twice for proper ending
+    if frame_files:
+        f.write(f"file '{frame_dir}/{frame_files[-1]}'\n")
+
+# Use concat demuxer for images
+cmd = [
+    '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+    '-f', 'concat', '-safe', '0', '-i', pattern_file,
+    '-i', tts_path,
+    '-map', '0:v:0',
+    '-map', '1:a:0',
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-af', 'volume=2.0',
+    '-shortest',
+    output_path
+]
+subprocess.run(cmd, check=True, capture_output=True)
+print(f"Output: {output_path}")
+
+# Verify output
+print("\n=== Verify output ===")
+info = video_analyzer.get_video_info(output_path)
+print(f"Duration: {info.get('duration', 'N/A')}s")
+print(f"Resolution: {info.get('width', 'N/A')}x{info.get('height', 'N/A')}")
+print(f"Has audio: {info.get('has_audio', False)}")
+
+# Check streams
+ffprobe_cmd = ['/home/linuxbrew/.linuxbrew/bin/ffprobe', '-hide_banner', '-show_streams', output_path]
+result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
+has_subtitle_stream = 'codec_type=subtitle' in result.stdout
+print(f"Has subtitle stream: {has_subtitle_stream} (should be False - burned in)")
+
+# Copy frames to temp for user to view
+user_frame_dir = f"/tmp/final_check_{TASK_ID}"
+os.makedirs(user_frame_dir, exist_ok=True)
+for f in frame_files[:5]:
+    import shutil
+    shutil.copy(os.path.join(frame_dir, f), user_frame_dir)
+
+print("\n=== SUCCESS ===")
+print(f"task_id: {TASK_ID}")
+print(f"output: {output_path}")
+print(f"frame_dir: {user_frame_dir}")
+
+# Get file size
+size = os.path.getsize(output_path)
+print(f"size: {size:,} bytes ({size/1024/1024:.1f}MB)")
+
+# Cleanup temp files
+os.remove(temp_no_audio)
+# os.remove(concat_file)

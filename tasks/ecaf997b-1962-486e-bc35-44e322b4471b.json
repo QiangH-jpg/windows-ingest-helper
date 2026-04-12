@@ -1,0 +1,13 @@
+{
+  "id": "ecaf997b-1962-486e-bc35-44e322b4471b",
+  "timestamp": "2026-04-08T18:28:28.384734",
+  "status": "rejected",
+  "materials_count": 15,
+  "timeline_clips_count": 13,
+  "extracted_clips_count": 13,
+  "audio_duration": 37.488,
+  "clip_total_duration": 36.99999999999999,
+  "output_path": "/home/admin/.openclaw/workspace/video-tool/outputs/raw/candidate.mp4",
+  "result_path": "/home/admin/.openclaw/workspace/video-tool/data/ecaf997b-1962-486e-bc35-44e322b4471b_rejection_report.json",
+  "passed": false
+}

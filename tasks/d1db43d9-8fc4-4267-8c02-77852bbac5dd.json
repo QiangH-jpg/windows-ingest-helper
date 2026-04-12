@@ -1,0 +1,13 @@
+{
+  "id": "d1db43d9-8fc4-4267-8c02-77852bbac5dd",
+  "timestamp": "2026-04-08T22:10:50.247223",
+  "status": "approved",
+  "mode": "semantic",
+  "materials_count": 15,
+  "timeline_clips_count": 14,
+  "audio_duration": 37.488,
+  "clip_total_duration": 37.24000000000001,
+  "output_path": "/home/admin/.openclaw/workspace/video-tool/outputs/approved/d1db43d9-8fc4-4267-8c02-77852bbac5dd_approved.mp4",
+  "result_path": "/home/admin/.openclaw/workspace/video-tool/outputs/approved/d1db43d9-8fc4-4267-8c02-77852bbac5dd_approved.mp4",
+  "passed": true
+}

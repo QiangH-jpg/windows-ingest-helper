@@ -1,0 +1,4 @@
+Windows_ingest_helper v1.0
+Build: 2026-04-12
+Python: 3.8+
+Dependencies: tos, pyinstaller (for EXE)

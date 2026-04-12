@@ -1,0 +1,5 @@
+Windows_ingest_helper v2.0
+Build: Local Build
+Date: 2026-04-12
+Platform: Windows x64
+Entry: ingest_helper.exe (after build)

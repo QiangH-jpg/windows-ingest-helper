@@ -1,0 +1,30 @@
+name: Build Windows EXE (Simple)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install and Build
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pyinstaller --onefile --windowed --name ingest_helper windows_ingest_helper/main.py
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-exe
+        path: dist/ingest_helper.exe
+        retention-days: 30

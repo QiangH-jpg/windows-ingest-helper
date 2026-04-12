@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>轻量新闻短视频工具 - 结果</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; padding: 10px; }
+        .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        h1 { color: #333; margin-bottom: 15px; font-size: 20px; }
+        .links { margin-bottom: 15px; }
+        .links a { color: #1890ff; text-decoration: none; margin-right: 15px; font-size: 14px; }
+        
+        /* 卡片式布局（手机友好） */
+        .task-card {
+            border: 1px solid #eee;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #fafafa;
+        }
+        .task-card .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .task-card .task-id {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            word-break: break-all;
+        }
+        .task-card .task-time {
+            font-size: 12px;
+            color: #999;
+        }
+        .task-card .task-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .status { padding: 3px 10px; border-radius: 12px; font-size: 12px; display: inline-block; white-space: nowrap; }
+        .status-pending { background: #f0f0f0; color: #666; }
+        .status-processing { background: #e6f7ff; color: #1890ff; }
+        .status-completed, .status-approved { background: #f6ffed; color: #52c41a; }
+        .status-failed, .status-rejected { background: #fff2f0; color: #ff4d4f; }
+        
+        .btn { padding: 6px 14px; border-radius: 4px; text-decoration: none; font-size: 13px; display: inline-block; white-space: nowrap; }
+        .btn-primary { background: #1890ff; color: white; }
+        .btn-primary:hover { background: #40a9ff; }
+        .btn-disabled { background: #ccc; color: #999; cursor: not-allowed; }
+        .empty { text-align: center; padding: 60px 20px; color: #999; }
+        .refresh-btn { background: #1890ff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .refresh-btn:hover { background: #40a9ff; }
+        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; }
+        .task-duration { font-size: 12px; color: #888; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="top-bar">
+            <h1>📥 任务列表与下载</h1>
+            <button class="refresh-btn" onclick="loadTasks()">🔄 刷新</button>
+        </div>
+        <div class="links">
+            <a href="/">← 返回上传页</a>
+        </div>
+        
+        <div id="taskList"></div>
+    </div>
+
+    <script>
+        function formatTime(timeStr) {
+            if (!timeStr) return '未知';
+            try {
+                let d = new Date(timeStr);
+                if (isNaN(d.getTime())) {
+                    // 尝试解析 "20260408_143048" 格式
+                    if (timeStr.match(/^\d{8}_\d{6}$/)) {
+                        const y = timeStr.slice(0,4), m = timeStr.slice(4,6), day = timeStr.slice(6,8);
+                        const h = timeStr.slice(9,11), min = timeStr.slice(11,13), s = timeStr.slice(13,15);
+                        d = new Date(`${y}-${m}-${day}T${h}:${min}:${s}`);
+                    }
+                }
+                if (isNaN(d.getTime())) {
+                    // 从字符串中提取日期部分
+                    const match = timeStr.match(/(\d{4}-\d{2}-\d{2})/);
+                    return match ? match[1] : timeStr.slice(0, 16);
+                }
+                return d.toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+            } catch(e) {
+                return timeStr.slice(0, 16);
+            }
+        }
+        
+        async function loadTasks() {
+            try {
+                const res = await fetch('/api/tasks');
+                let tasks = await res.json();
+                
+                const container = document.getElementById('taskList');
+                
+                if (!tasks.length) {
+                    container.innerHTML = '<div class="empty">暂无任务<br><a href="/" style="color:#1890ff;">去创建第一个任务 →</a></div>';
+                    return;
+                }
+                
+                // 按时间排序（兼容 created_at 和 timestamp）
+                tasks.sort((a, b) => {
+                    const ta = a.timestamp || a.created_at || '';
+                    const tb = b.timestamp || b.created_at || '';
+                    return tb.localeCompare(ta);
+                });
+                
+                let html = '';
+                
+                for (const task of tasks) {
+                    const status = task.status || 'unknown';
+                    const statusMap = {
+                        'pending': '等待中',
+                        'processing': '处理中',
+                        'completed': '已完成',
+                        'approved': '✅ 已通过',
+                        'failed': '失败',
+                        'rejected': '❌ 未通过'
+                    };
+                    const statusText = statusMap[status] || status;
+                    const statusClass = 'status-' + status;
+                    
+                    const canDownload = (status === 'completed' || status === 'approved') && task.output_path;
+                    const downloadBtn = canDownload 
+                        ? `<a href="/api/download/${task.id}" class="btn btn-primary">⬇️ 下载</a>`
+                        : '<span class="btn btn-disabled">不可下载</span>';
+                    
+                    const timeStr = formatTime(task.timestamp || task.created_at);
+                    const duration = task.video_duration_sec || task.audio_duration || '';
+                    const durationStr = duration ? `${parseFloat(duration).toFixed(1)}s` : '';
+                    const resolution = task.video_resolution || '';
+                    const fps = task.video_fps || '';
+                    const size = task.file_size_mb || '';
+                    
+                    const details = [];
+                    if (durationStr) details.push(durationStr);
+                    if (resolution) details.push(resolution);
+                    if (fps) details.push(`${fps}fps`);
+                    if (size) details.push(`${size}MB`);
+                    const detailsStr = details.join(' | ');
+                    
+                    html += `<div class="task-card">
+                        <div class="task-header">
+                            <span class="task-id">${task.id.slice(0,12)}...</span>
+                            <span class="task-time">${timeStr}</span>
+                        </div>
+                        <div class="task-info">
+                            <div>
+                                <span class="status ${statusClass}">${statusText}</span>
+                                ${detailsStr ? `<div style="font-size:11px;color:#666;margin-top:4px;">${detailsStr}</div>` : ''}
+                            </div>
+                            ${downloadBtn}
+                        </div>
+                        ${task.script ? `<div style="margin-top:8px;font-size:12px;color:#666;border-top:1px solid #eee;padding-top:6px;">📝 ${task.script.slice(0,50)}${task.script.length>50?'...':''}</div>` : ''}
+                    </div>`;
+                }
+                
+                container.innerHTML = html;
+                
+            } catch (err) {
+                document.getElementById('taskList').innerHTML = '<div class="empty">加载失败：' + err.message + '</div>';
+            }
+        }
+        
+        loadTasks();
+        setInterval(loadTasks, 5000);
+    </script>
+</body>
+</html>

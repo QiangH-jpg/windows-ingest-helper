@@ -1,0 +1,140 @@
+{
+  "task_id": "9a50f4f5-ef0e-41c2-8805-a65894464edc",
+  "target_duration": 30,
+  "selected_clips": [
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/394A0108__8f355bf4__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/394A0109__f26a1fb1__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115140223_0109_D__e09f6b16__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115140336_0110_D__c5bb35bb__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115142627_0112_D__d54f8ab5__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115143357_0118_D__d5873e18__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur1.8s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 1.76,
+      "end_time": 1.76,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115143401_0119_D__f6cc8c8d__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur2.9s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 2.92,
+      "end_time": 2.92,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115143406_0120_D__96daf022__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur3.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 3.0,
+      "end_time": 3.0,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115143625_0127_D__9e40a66b__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur4.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 4.04,
+      "end_time": 4.04,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115143827_0133_D__c446065b__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115144146_0143_D__580169d8__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115144241_0146_D__badf00ae__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    },
+    {
+      "clip_path": "/home/admin/.openclaw/workspace/video-tool/workdir/9a50f4f5-ef0e-41c2-8805-a65894464edc/clips/DJI_20001115144510_0148_D__69481da0__h264__1280x720__25fps__yuv420p__v1_dynamic_0_start0.0s_dur5.0s.mp4",
+      "source_file_id": "unknown",
+      "source_index": -1,
+      "start_time": 0,
+      "duration": 5,
+      "end_time": 5,
+      "selected_reason": "distributed_selection"
+    }
+  ],
+  "total_clips_selected": 13,
+  "sources_used": [
+    "8f355bf4",
+    "f26a1fb1",
+    "e09f6b16",
+    "c5bb35bb",
+    "d54f8ab5",
+    "d5873e18",
+    "f6cc8c8d",
+    "96daf022",
+    "9e40a66b",
+    "c446065b",
+    "580169d8",
+    "badf00ae",
+    "69481da0"
+  ],
+  "created_at": "2026-04-11T07:12:26.115567"
+}

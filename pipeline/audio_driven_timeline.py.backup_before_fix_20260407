@@ -1,0 +1,239 @@
+"""
+时间轴主控模块 - 音频驱动版（带尾段保护）
+
+核心规则：视频总时长 = TTS音频时长（严格一致）
+保护机制：如果 clip 总时长 < TTS 时长，自动延长最后一段
+"""
+import os
+import subprocess
+from typing import List, Dict, Tuple
+
+VIDEO = {
+    'ffmpeg_path': '/home/linuxbrew/.linuxbrew/bin/ffmpeg',
+    'ffprobe_path': '/home/linuxbrew/.linuxbrew/bin/ffprobe',
+}
+
+def get_duration(path: str) -> float:
+    """获取音视频时长（秒）"""
+    cmd = [
+        VIDEO['ffprobe_path'], '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return float(result.stdout.strip())
+
+
+def calculate_clip_distribution(tts_duration: float, total_clips: int) -> List[float]:
+    """
+    根据 TTS 时长计算每个 clip 应该的时长
+    
+    规则：
+    1. 平均分配
+    2. 避免极端分布
+    """
+    if total_clips == 0:
+        return []
+    
+    avg_duration = tts_duration / total_clips
+    durations = [avg_duration] * total_clips
+    
+    # 微调最后一个
+    total = sum(durations)
+    if total != tts_duration:
+        diff = tts_duration - total
+        durations[-1] += diff
+    
+    return durations
+
+
+def assemble_video_audio_driven(
+    clips: List[Dict],
+    audio_path: str,
+    subtitle_path: str,
+    output_path: str,
+    fps: int = 25,
+    resolution: Tuple[int, int] = (1280, 720),
+    keep_concat: bool = False
+) -> str:
+    """
+    音频驱动的视频合成（带尾段保护）
+    
+    保护机制：
+    1. 计算实际 clip 可用时长
+    2. 如果总时长 < TTS 时长，自动延长最后一段
+    3. 强制校验：输出视频时长 >= TTS 时长 - 0.1s
+    """
+    from pipeline.processor import build_drawtext_filter
+    
+    # ========================================
+    # Step 1: 获取 TTS 时长（唯一真相源）
+    # ========================================
+    tts_duration = get_duration(audio_path)
+    print(f"[时间轴] TTS 时长: {tts_duration:.2f}s")
+    
+    if len(clips) == 0:
+        raise ValueError("没有可用的素材 clip")
+    
+    # ========================================
+    # Step 2: 获取每个 clip 的实际可用时长
+    # ========================================
+    clip_actual_durations = []
+    for clip in clips:
+        clip_path = clip['path']
+        if os.path.exists(clip_path):
+            actual_dur = get_duration(clip_path)
+            clip_actual_durations.append(actual_dur)
+        else:
+            clip_actual_durations.append(5.0)  # 默认 5 秒
+    
+    print(f"[时间轴] Clip 实际时长: {clip_actual_durations}")
+    print(f"[时间轴] Clip 总时长: {sum(clip_actual_durations):.2f}s")
+    
+    # ========================================
+    # Step 3: 计算目标时长分配
+    # ========================================
+    target_durations = calculate_clip_distribution(tts_duration, len(clips))
+    
+    # ========================================
+    # Step 4: 检查是否需要延长（关键保护）
+    # ========================================
+    total_actual = sum(clip_actual_durations)
+    total_target = sum(target_durations)
+    
+    if total_actual < total_target:
+        # 需要延长最后一段
+        deficit = total_target - total_actual
+        print(f"[时间轴] ⚠️ Clip 总时长不足，需要延长最后一段 {deficit:.2f}s")
+        
+        # 调整 target_durations，让最后一段延长
+        target_durations[-1] = clip_actual_durations[-1] + deficit
+    
+    print(f"[时间轴] 素材分配:")
+    for i, d in enumerate(target_durations):
+        print(f"  clip {i}: {d:.2f}s (实际: {clip_actual_durations[i]:.2f}s)")
+    print(f"  总计: {sum(target_durations):.2f}s")
+    
+    # ========================================
+    # Step 5: 构建 filter_complex
+    # ========================================
+    FONT_PATH = '/usr/share/fonts/wqy-microhei/wqy-microhei.ttc'
+    
+    # 输入文件列表
+    input_args = []
+    for clip in clips:
+        input_args.extend(['-i', clip['path']])
+    input_args.extend(['-i', audio_path])
+    
+    # 构建滤镜链
+    filter_parts = []
+    
+    for i, (target_dur, actual_dur) in enumerate(zip(target_durations, clip_actual_durations)):
+        # 判断是否需要延长
+        if target_dur > actual_dur:
+            # 需要延长：使用 tpad 重复最后一帧
+            extend_duration = target_dur - actual_dur
+            extend_frames = int(extend_duration * fps)
+            
+            filter_parts.append(
+                f"[{i}:v]"
+                f"trim=duration={actual_dur:.3f},"
+                f"setpts=PTS-STARTPTS,"
+                f"scale={resolution[0]}:{resolution[1]}:force_original_aspect_ratio=decrease,"
+                f"pad={resolution[0]}:{resolution[1]}:(ow-iw)/2:(oh-ih)/2,"
+                f"fps={fps},"
+                f"tpad=stop_mode=clone:stop_duration={extend_duration:.3f},"
+                f"setsar=1[v{i}];"
+            )
+        else:
+            # 正常 trim
+            filter_parts.append(
+                f"[{i}:v]trim=duration={target_dur:.3f},"
+                f"scale={resolution[0]}:{resolution[1]}:force_original_aspect_ratio=decrease,"
+                f"pad={resolution[0]}:{resolution[1]}:(ow-iw)/2:(oh-ih)/2,"
+                f"fps={fps},"
+                f"setsar=1[v{i}];"
+            )
+    
+    # 拼接所有视频
+    concat_inputs = ''.join([f"[v{i}]" for i in range(len(clips))])
+    filter_parts.append(f"{concat_inputs}concat=n={len(clips)}:v=1:a=0[concatv];")
+    
+    # 添加字幕
+    if subtitle_path and os.path.exists(subtitle_path):
+        drawtext_filter = build_drawtext_filter(subtitle_path, FONT_PATH)
+        if drawtext_filter:
+            filter_parts.append(f"[concatv]{drawtext_filter}[outv]")
+        else:
+            filter_parts.append(f"[concatv]null[outv]")
+    else:
+        filter_parts.append(f"[concatv]null[outv]")
+    
+    filter_complex = ''.join(filter_parts)
+    
+    # ========================================
+    # Step 6: 构建 ffmpeg 命令
+    # ========================================
+    cmd = [VIDEO['ffmpeg_path'], '-y']
+    cmd.extend(input_args)
+    cmd.extend(['-filter_complex', filter_complex])
+    
+    audio_idx = len(clips)
+    cmd.extend(['-map', '[outv]', '-map', f'{audio_idx}:a:0'])
+    
+    cmd.extend([
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-af', 'volume=2.0',
+        '-r', str(fps),
+        '-shortest',  # 确保视频不超过音频时长
+        '-movflags', '+faststart',
+        output_path
+    ])
+    
+    # ========================================
+    # Step 7: 执行
+    # ========================================
+    print(f"[时间轴] 执行合成...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        print(f"[错误] ffmpeg 失败: {result.stderr[:500]}")
+        raise RuntimeError(f"ffmpeg 合成失败")
+    
+    # ========================================
+    # Step 8: 强制校验
+    # ========================================
+    if os.path.exists(output_path):
+        actual_duration = get_duration(output_path)
+        diff = actual_duration - tts_duration
+        
+        print(f"[时间轴] 结果:")
+        print(f"  TTS 时长: {tts_duration:.2f}s")
+        print(f"  视频时长: {actual_duration:.2f}s")
+        print(f"  误差: {diff:.2f}s")
+        
+        # 强制校验
+        if actual_duration < tts_duration - 0.1:
+            raise RuntimeError(
+                f"❌ 校验失败: 视频时长 ({actual_duration:.2f}s) < TTS 时长 ({tts_duration:.2f}s - 0.1s)"
+            )
+        
+        if diff > 0:
+            print(f"  ✅ 视频时长 >= TTS 时长")
+        elif diff >= -0.1:
+            print(f"  ✅ 时长误差在允许范围内")
+        else:
+            print(f"  ⚠️ 时长误差超过 0.1s")
+        
+        return output_path
+    else:
+        raise RuntimeError("输出文件未生成")
+
+
+if __name__ == '__main__':
+    print("时间轴主控模块 - 音频驱动版（带尾段保护）")

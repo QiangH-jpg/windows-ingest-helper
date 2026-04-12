@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""快速验证脚本 - 使用已有clips生成3组样片"""
+import os
+import sys
+import json
+import uuid
+import subprocess
+import asyncio
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from core.storage import storage
+from pipeline import processor, video_analyzer
+from pipeline.tts_provider import generate_tts, create_subtitle_srt_from_meta
+from PIL import Image, ImageDraw, ImageFont
+
+CHINESE_FONT = '/usr/share/fonts/wqy-microhei/wqy-microhei.ttc'
+FONT_SIZE = 56
+
+def run_quick_verify(group_name, clips, script):
+    """快速验证"""
+    task_id = str(uuid.uuid4())
+    print(f"\n=== {group_name} ===")
+    print(f"Task ID: {task_id}")
+    
+    # 保存 timeline
+    sources_used = list(set(c['source_index'] for c in clips))
+    timeline_path = os.path.join(storage.workdir, f"{task_id}_timeline.json")
+    with open(timeline_path, 'w') as f:
+        json.dump({
+            'task_id': task_id,
+            'selected_clips': clips,
+            'sources_used': sources_used
+        }, f, ensure_ascii=False, indent=2)
+    
+    # 生成 TTS
+    tts_path = os.path.join(storage.workdir, f"{task_id}_tts.mp3")
+    tts_meta_path = os.path.join(storage.workdir, f"{task_id}_tts_meta.json")
+    tts_meta = asyncio.run(generate_tts(script, tts_path, tts_meta_path))
+    
+    # SRT
+    srt_path = os.path.join(storage.workdir, f"{task_id}.srt")
+    create_subtitle_srt_from_meta(tts_meta, srt_path)
+    
+    # 组装视频
+    output_path = storage.get_output_path(task_id)
+    assemble_with_burned_subs(clips, tts_path, srt_path, output_path)
+    
+    # 保存任务
+    task_info = {
+        'id': task_id,
+        'status': 'completed',
+        'output_path': output_path,
+        'progress': 100,
+        'created_at': subprocess.run(['date', '+%Y-%m-%dT%H:%M:%S'], capture_output=True, text=True).stdout.strip()
+    }
+    os.makedirs(os.path.join(storage.workdir, 'tasks'), exist_ok=True)
+    with open(os.path.join(storage.workdir, 'tasks', f'{task_id}.json'), 'w') as f:
+        json.dump(task_info, f, ensure_ascii=False, indent=2)
+    
+    return {
+        'task_id': task_id,
+        'output_path': output_path,
+        'sources_used': sources_used,
+        'tts_path': tts_path,
+        'srt_path': srt_path
+    }
+
+def assemble_with_burned_subs(clips, audio_path, subtitle_path, output_path):
+    """连续视频 + 中文字幕"""
+    font = ImageFont.truetype(CHINESE_FONT, FONT_SIZE)
+    
+    # Concat
+    concat_file = os.path.join(storage.outputs_dir, f"{output_path}.concat.txt")
+    with open(concat_file, 'w') as f:
+        for clip in clips:
+            f.write(f"file '{clip['path']}'\n")
+    
+    # Step 1: temp video
+    temp_video = os.path.join(storage.workdir, f"{os.path.basename(output_path)}_temp.mp4")
+    cmd = [
+        '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+        '-f', 'concat', '-safe', '0', '-i', concat_file,
+        '-i', audio_path,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-af', 'volume=2.0', '-r', '59.94', '-t', '15',
+        temp_video
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    
+    info = video_analyzer.get_video_info(temp_video)
+    width, height = info.get('width', 1920), info.get('height', 1080)
+    
+    # Step 2: extract frames (10fps)
+    frame_dir = os.path.join(storage.workdir, f"{os.path.basename(output_path)}_frames")
+    os.makedirs(frame_dir, exist_ok=True)
+    subprocess.run([
+        '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y', '-i', temp_video,
+        '-vf', 'fps=10', f'{frame_dir}/frame_%05d.png'
+    ], capture_output=True)
+    
+    frame_files = sorted([f for f in os.listdir(frame_dir) if f.endswith('.png')])
+    print(f"Frames: {len(frame_files)}")
+    
+    # Parse SRT
+    subtitles = []
+    with open(subtitle_path, 'r', encoding='utf-8') as f:
+        for block in f.read().strip().split('\n\n'):
+            lines = block.split('\n')
+            if len(lines) < 3: continue
+            start, end = lines[1].split(' --> ')
+            h,m,s = start.replace(',','.').split(':')
+            start_t = int(h)*3600+int(m)*60+float(s)
+            h,m,s = end.replace(',','.').split(':')
+            end_t = int(h)*3600+int(m)*60+float(s)
+            subtitles.append({'start': start_t, 'end': end_t, 'text': '\n'.join(lines[2:])})
+    
+    # Step 3: burn subtitles
+    for i, frame_file in enumerate(frame_files):
+        frame_path = os.path.join(frame_dir, frame_file)
+        timestamp = int(frame_file.replace('frame_','').replace('.png','')) / 10.0
+        
+        current_text = ""
+        for sub in subtitles:
+            if sub['start'] <= timestamp <= sub['end']:
+                current_text = sub['text']
+                break
+        
+        if current_text:
+            img = Image.open(frame_path).convert('RGB')
+            draw = ImageDraw.Draw(img)
+            try:
+                l,t,r,b = draw.textbbox((0,0), current_text, font=font)
+                tw, th = r-l, b-t
+            except: tw, th = 800, 70
+            x, y = (width-tw)//2, height-th-100
+            for ox in range(-4,5):
+                for oy in range(-4,5):
+                    if ox!=0 or oy!=0: draw.text((x+ox,y+oy), current_text, font=font, fill='black')
+            draw.text((x,y), current_text, font=font, fill='white')
+            img.save(frame_path, 'PNG', quality=90)
+    
+    # Step 4: re-encode
+    input_list = os.path.join(frame_dir, 'input.txt')
+    with open(input_list, 'w') as f:
+        for ff in frame_files:
+            f.write(f"file '{frame_dir}/{ff}'\nduration 0.1\n")
+        f.write(f"file '{frame_dir}/{frame_files[-1]}'\n")
+    
+    cmd = [
+        '/home/linuxbrew/.linuxbrew/bin/ffmpeg', '-y',
+        '-f', 'concat', '-safe', '0', '-i', input_list,
+        '-i', audio_path,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-vf', 'fps=59.94',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-af', 'volume=2.0', '-shortest',
+        output_path
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    print(f"Output: {output_path}")
+    
+    os.remove(temp_video)
+    return output_path
+
+if __name__ == '__main__':
+    script = "欢迎观看新闻短视频。这是由系统自动生成的成片，使用了多段真实素材拼接而成。"
+    
+    # A组 (4a35afaa)
+    clips_a = [
+        {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa_transcoded_0.mp4.clip_0.mp4', 'source_index': 0},
+        {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/4a35afaa_transcoded_1.mp4.clip_0.mp4', 'source_index': 1}
+    ]
+    result_a = run_quick_verify('A组', clips_a, script)
+    print(f"A组完成: {result_a['task_id']}")
+    
+    # B组 (d9dc9762) - 用不同素材
+    clips_b = [
+        {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/d9dc9762_transcoded_0.mp4.clip_0.mp4', 'source_index': 0},
+        {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/d9dc9762_transcoded_1.mp4.clip_0.mp4', 'source_index': 1}
+    ]
+    result_b = run_quick_verify('B组', clips_b, script)
+    print(f"B组完成: {result_b['task_id']}")
+    
+    # C组 (e3549455) - 用不同素材
+    clips_c = [
+        {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/e3549455_transcoded_0.mp4.clip_0.mp4', 'source_index': 0},
+        {'path': '/home/admin/.openclaw/workspace/video-tool/workdir/e3549455_transcoded_1.mp4.clip_0.mp4', 'source_index': 1}
+    ]
+    result_c = run_quick_verify('C组', clips_c, script)
+    print(f"C组完成: {result_c['task_id']}")
+    
+    print("\n=== 总结 ===")
+    print(f"A组: {result_a['task_id']} -> {result_a['output_path']}")
+    print(f"B组: {result_b['task_id']} -> {result_b['output_path']}")
+    print(f"C组: {result_c['task_id']} -> {result_c['output_path']}")

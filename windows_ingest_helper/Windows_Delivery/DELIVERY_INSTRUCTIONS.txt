@@ -1,0 +1,41 @@
+========================================
+Windows 上传/预处理助手 v2.0
+【本地打包版】
+========================================
+
+【打包步骤】
+
+1. 将整个 Windows_Delivery 文件夹复制到 Windows 电脑
+
+2. 在 Windows 上双击运行：build_windows.bat
+
+3. 等待打包完成（约 3-5 分钟）
+   - 自动安装 Python 依赖
+   - 打包为 ingest_helper.exe
+   - 创建 ZIP 包
+
+4. 产物位置：
+   Windows_Delivery/Windows_Ingest_Helper_v2.zip
+
+5. 分发给用户：
+   - 解压 ZIP
+   - 双击 ingest_helper.exe
+   - 开始使用
+
+【前提条件】
+- Windows 10/11
+- Python 3.8+ 已安装
+- 网络连接（用于安装依赖）
+
+【TOS 配置】
+已内置：
+- Bucket: e23-video
+- Region: cn-beijing
+- Endpoint: tos-cn-beijing.volces.com
+
+需要上传功能时设置环境变量：
+set TOS_AK=你的 Access Key
+set TOS_SK=你的 Secret Key
+
+【版本】v2.0
+【日期】2026-04-12

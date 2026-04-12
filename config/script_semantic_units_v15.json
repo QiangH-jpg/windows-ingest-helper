@@ -1,0 +1,85 @@
+{
+  "description": "语义选片 V1.5 - 稿件语义单元（细粒度，句子/短语级）",
+  "semantic_units": [
+    {
+      "id": 1,
+      "text": "3 月 26 日，济南市人社局在美团服务中心开展人社服务大篷车活动",
+      "keywords": ["开展", "活动", "服务中心"],
+      "target_tags": ["现场全景", "横幅"],
+      "target_actions": ["全景展示", "举横幅合影", "拍摄横幅"],
+      "priority": "high"
+    },
+    {
+      "id": 2,
+      "text": "活动以走进奔跑者保障与你同行为主题",
+      "keywords": ["主题", "奔跑者", "保障"],
+      "target_tags": ["横幅", "合影"],
+      "target_actions": ["举横幅合影", "拍摄横幅"],
+      "priority": "medium"
+    },
+    {
+      "id": 3,
+      "text": "把人社服务送到外卖骑手等一线劳动者",
+      "keywords": ["外卖骑手", "一线劳动者", "送到"],
+      "target_tags": ["外卖骑手"],
+      "target_actions": ["骑手近景", "骑手列队", "骑手微笑"],
+      "priority": "high"
+    },
+    {
+      "id": 4,
+      "text": "现场通过发放资料",
+      "keywords": ["发放资料"],
+      "target_tags": ["发放资料"],
+      "target_actions": ["递发资料"],
+      "priority": "high"
+    },
+    {
+      "id": 5,
+      "text": "面对面讲解",
+      "keywords": ["讲解", "面对面"],
+      "target_tags": ["讲解交流"],
+      "target_actions": ["面对面讲解", "手势指引"],
+      "priority": "high"
+    },
+    {
+      "id": 6,
+      "text": "向小哥介绍社保参保权益保障等政策",
+      "keywords": ["介绍", "政策", "社保", "权益"],
+      "target_tags": ["讲解交流", "政策宣传"],
+      "target_actions": ["面对面讲解", "展示宣传页", "手势指引"],
+      "priority": "medium"
+    },
+    {
+      "id": 7,
+      "text": "还有互动环节",
+      "keywords": ["互动"],
+      "target_tags": ["互动环节"],
+      "target_actions": ["投掷互动", "问答互动"],
+      "priority": "high"
+    },
+    {
+      "id": 8,
+      "text": "让大家在轻松氛围中了解政策",
+      "keywords": ["轻松", "氛围"],
+      "target_tags": ["轻松氛围"],
+      "target_actions": ["骑手微笑", "轻松交流"],
+      "priority": "medium"
+    },
+    {
+      "id": 9,
+      "text": "济南市人社局持续推动服务走近新就业形态劳动者",
+      "keywords": ["持续推动", "服务", "新就业"],
+      "target_tags": ["领导交流", "讲解交流"],
+      "target_actions": ["领导对骑手讲话", "握手交流", "面对面讲解"],
+      "priority": "high"
+    },
+    {
+      "id": 10,
+      "text": "打通保障最后一公里",
+      "keywords": ["打通", "保障", "最后一公里"],
+      "target_tags": ["现场全景", "领导交流"],
+      "target_actions": ["全景展示", "握手交流"],
+      "priority": "medium"
+    }
+  ]
+}

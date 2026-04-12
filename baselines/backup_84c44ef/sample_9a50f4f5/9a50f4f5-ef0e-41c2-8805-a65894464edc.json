@@ -1,0 +1,28 @@
+{
+  "id": "9a50f4f5-ef0e-41c2-8805-a65894464edc",
+  "file_ids": [
+    "16a3ac46-2e93-428b-abaa-6224020d1d7d",
+    "a9aed1ff-d419-40d9-8da9-30f5806bd8e9",
+    "b66c5edb-a68c-420d-bd0e-27fd35ad3168",
+    "028938bd-47d4-4388-a592-578c684961de",
+    "07977dc5-4cc3-4535-8302-0fed2bc12aa2",
+    "6b29c736-677f-4f07-aa16-353a689521dc",
+    "1d47d24b-7bdf-433e-b2b2-943cb933fdad",
+    "2c5b86bc-08d0-490a-ba64-70810929163a",
+    "01e7a999-74b0-4b46-b0c4-3905e5128165",
+    "872eac59-a64d-4c5d-9de8-622ca6c0ecce",
+    "c330fe39-9038-4cde-a3a9-becb944a89b7",
+    "7cd69b77-f65b-47bc-8c1c-cba69de2d492",
+    "270a5bd2-6a7d-4cb7-9324-61a111dcd7a8"
+  ],
+  "script": "3 月 26 日，济南市人社局人社服务大篷车活动在美团服务中心开展。活动以走进奔跑者保障与你同行为主题，聚焦外卖骑手等新就业形态劳动者。工作人员和志愿者通过发放资料、面对面讲解，向外卖小哥介绍社保参保、权益保障政策。现场设置互动环节，让大家在轻松氛围中了解政策、增强维权意识。济南市人社局持续推动人社服务走近新就业形态劳动者，打通服务保障最后一公里。",
+  "task_description": null,
+  "status": "completed",
+  "created_at": "2026-04-11T07:10:31.248495",
+  "updated_at": "2026-04-11T07:13:04.095416",
+  "progress": 100,
+  "output_path": "/home/admin/.openclaw/workspace/video-tool/outputs/9a50f4f5-ef0e-41c2-8805-a65894464edc.mp4",
+  "error": null,
+  "project_state_loaded": true,
+  "constraints_applied": true
+}

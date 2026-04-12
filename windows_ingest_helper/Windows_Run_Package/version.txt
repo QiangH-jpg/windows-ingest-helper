@@ -1,0 +1,5 @@
+Windows_ingest_helper v1.0
+Build: 2026-04-12
+Python: 3.8+
+Dependencies: tos, tkinter (for GUI)
+Entry: start.bat or run_tool.cmd

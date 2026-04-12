@@ -1,0 +1,68 @@
+{
+  "version": "1.0",
+  "created_at": "2026-04-12T13:30:24.928286",
+  "input_directory": "test_ingest/input",
+  "total_files": 3,
+  "processed_files": [
+    {
+      "index": 1,
+      "original_path": "test_ingest/input/clip_11.mp4",
+      "original_filename": "clip_11.mp4",
+      "original_info": {
+        "width": 1280,
+        "height": 720,
+        "duration": 3.0,
+        "fps": "25/1",
+        "codec": "h264",
+        "size": 746649
+      },
+      "file_hash": "c9233d830d76bc458e364bfa7cce66da362b3eb5115c7f2147df0e9553424cf5",
+      "proxy_path": "test_ingest/output/proxy/proxy_0001_clip_11.mp4",
+      "proxy_filename": "proxy_0001_clip_11.mp4",
+      "proxy_size": 1038111,
+      "tos_key": null,
+      "tos_url": null,
+      "upload_status": "pending",
+      "preprocess_notes": []
+    },
+    {
+      "index": 2,
+      "original_path": "test_ingest/input/clip_5.mp4",
+      "original_filename": "clip_5.mp4",
+      "original_info": {
+        "width": 1280,
+        "height": 720,
+        "duration": 4.44,
+        "fps": "25/1",
+        "codec": "h264",
+        "size": 1620758
+      },
+      "file_hash": "c0257bba34ee6e0aebe75313e2c1a2350a1e3e0e9362df58b623689851ee2aae",
+      "proxy_path": "test_ingest/output/proxy/proxy_0002_clip_5.mp4",
+      "proxy_filename": "proxy_0002_clip_5.mp4",
+      "proxy_size": 1519280,
+      "tos_key": null,
+      "tos_url": null,
+      "upload_status": "pending",
+      "preprocess_notes": []
+    }
+  ],
+  "bad_files": [
+    {
+      "original_path": "test_ingest/input/clip_0.mp4",
+      "original_info": {
+        "width": 1280,
+        "height": 720,
+        "duration": 1.52,
+        "fps": "25/1",
+        "codec": "h264",
+        "size": 665415
+      },
+      "reasons": [
+        "时长过短 (1.5s)"
+      ],
+      "status": "bad"
+    }
+  ],
+  "duplicates": []
+}

@@ -1,0 +1,5 @@
+Windows_ingest_helper v2.0
+Build: 2026-04-12
+Type: Portable (Python embedded)
+Entry: start.bat
+Note: No Python installation required

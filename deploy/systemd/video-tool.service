@@ -1,0 +1,33 @@
+[Unit]
+Description=Video Tool Service - 视频成片服务
+After=network.target
+
+[Service]
+Type=simple
+User=admin
+Group=admin
+WorkingDirectory=/opt/video-tool
+Environment="PATH=/opt/video-tool/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="VIDEO_TOOL_BASE_DIR=/opt/video-tool"
+Environment="VIDEO_TOOL_HOST=0.0.0.0"
+Environment="VIDEO_TOOL_PORT=8088"
+Environment="LOG_LEVEL=INFO"
+EnvironmentFile=-/opt/video-tool/config/.env
+ExecStart=/opt/video-tool/.venv/bin/python /opt/video-tool/run.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/opt/video-tool/logs/app/service.log
+StandardError=append:/opt/video-tool/logs/app/service.error.log
+
+# 资源限制
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# 安全设置
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/video-tool/uploads /opt/video-tool/workdir /opt/video-tool/outputs /opt/video-tool/logs /opt/video-tool/cache
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+{
+  "id": "fix_real_material_20260411_063617",
+  "timestamp": "2026-04-11T06:36:49.633868",
+  "created_at": "2026-04-11T06:36:49.633868",
+  "status": "completed",
+  "materials_count": 2,
+  "timeline_clips_count": 4,
+  "extracted_clips_count": 4,
+  "audio_duration": 8.88,
+  "clip_total_duration": 20.0,
+  "video_duration_sec": 8.86,
+  "video_resolution": "1280x720",
+  "video_fps": 30,
+  "file_size_mb": 2.19,
+  "output_path": "/home/admin/.openclaw/workspace/video-tool/outputs/fix_real_material_20260411_063617.mp4",
+  "result_path": "/home/admin/.openclaw/workspace/video-tool/outputs/fix_real_material_20260411_063617.mp4",
+  "script": "这是一个使用真实素材生成的测试视频。画面应该显示真实的航拍内容，而不是纯色背景。",
+  "root_cause": "原素材位于 uploads/test/ 目录，是纯色测试视频 (5kb/s, 44KB/60s)",
+  "fix_description": "使用真实素材 394A0108.MP4 和 394A0109.MP4 替代测试占位文件"
+}

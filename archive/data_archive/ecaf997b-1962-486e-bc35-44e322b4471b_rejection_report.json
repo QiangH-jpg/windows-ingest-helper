@@ -1,0 +1,9 @@
+{
+  "task_id": "ecaf997b-1962-486e-bc35-44e322b4471b",
+  "timestamp": "20260408_182905",
+  "candidate_path": "/home/admin/.openclaw/workspace/video-tool/outputs/raw/candidate.mp4",
+  "issues": [
+    "音视频同步失败：视频37.47s < 音频37.49s + 缓冲0.10s"
+  ],
+  "status": "rejected"
+}

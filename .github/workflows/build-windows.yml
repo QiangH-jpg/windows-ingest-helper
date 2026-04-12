@@ -24,20 +24,28 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller tos
     
+    - name: Debug directory
+      run: |
+        pwd
+        ls -la
+        ls -la windows_ingest_helper/ || echo "Directory not found"
+    
     - name: Build EXE
       run: |
-        cd windows_ingest_helper
-        pyinstaller --onefile --windowed --name ingest_helper --icon=DEFAULT main.py
-        ls -la dist/
+        python -m pip install pyinstaller tos
+        pyinstaller --onefile --windowed --name ingest_helper --icon=DEFAULT windows_ingest_helper/main.py
+        ls -la dist/ || echo "dist not found"
+        mkdir -p dist_release
+        cp dist/ingest_helper.exe dist_release/ 2>/dev/null || echo "Copy failed"
+        ls -la dist_release/
     
     - name: Create release package
       run: |
-        cd windows_ingest_helper
         mkdir -p Windows_Release
-        cp dist/ingest_helper.exe Windows_Release/
-        cp upload_to_tos.py Windows_Release/
-        cp README.txt Windows_Release/
-        cp version.txt Windows_Release/
+        cp dist_release/ingest_helper.exe Windows_Release/
+        cp windows_ingest_helper/upload_to_tos.py Windows_Release/
+        cp windows_ingest_helper/README.md Windows_Release/README.txt || echo "Windows 上传/预处理助手 v2.0" > Windows_Release/README.txt
+        echo "v2.0" > Windows_Release/version.txt
         echo "Windows 上传/预处理助手 v2.0" > Windows_Release/README.txt
         echo "========================================" >> Windows_Release/README.txt
         echo "" >> Windows_Release/README.txt
@@ -71,6 +79,33 @@ jobs:
         cd Windows_Release
         7z a -tzip ../Windows_Ingest_Helper_v2.zip *
         ls -la ../Windows_Ingest_Helper_v2.zip
+        
+        # 上传到 TOS
+        pip install tos
+        python -c "
+import os
+from tos import TosClientV2
+
+TOS_AK = os.getenv('TOS_AK')
+TOS_SK = os.getenv('TOS_SK')
+if not TOS_AK or not TOS_SK:
+    print('TOS 凭据未配置，跳过上传')
+    exit(0)
+    
+TOS_BUCKET = 'e23-video'
+TOS_REGION = 'cn-beijing'
+TOS_ENDPOINT = f'tos-{TOS_REGION}.volces.com'
+
+client = TosClientV2(ak=TOS_AK, sk=TOS_SK, endpoint=TOS_ENDPOINT, region=TOS_REGION)
+
+zip_path = 'Windows_Ingest_Helper_v2.zip'
+tos_key = 'Windows_Executable/Windows_Ingest_Helper_v2.zip'
+
+print(f'Uploading {zip_path} to {tos_key}...')
+client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)
+print(f'Upload successful')
+print(f'Download URL: https://{TOS_BUCKET}.{TOS_ENDPOINT}/{tos_key}')
+"
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -86,8 +121,8 @@ jobs:
         import os
         from tos import TosClientV2
         
-        TOS_AK = os.getenv('TOS_AK', 'AKLTZGIxYjcxZWY2NzIyNDIxYjhiOGZjMTYzY2E4OGQxYzE')
-        TOS_SK = os.getenv('TOS_SK', 'T0RFMVlUSXdZbUl3WVdVMU5HVTBPV0kyTURWak5UYzROemd5TkdWaU9UWQ==')
+        TOS_AK = os.getenv('TOS_AK')
+        TOS_SK = os.getenv('TOS_SK')
         TOS_BUCKET = 'e23-video'
         TOS_REGION = 'cn-beijing'
         TOS_ENDPOINT = f'tos-{TOS_REGION}.volces.com'
