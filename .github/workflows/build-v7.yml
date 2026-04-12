@@ -1,4 +1,4 @@
-name: Build Windows EXE v6
+name: Build Windows EXE v7
 
 on:
   workflow_dispatch:
@@ -79,14 +79,14 @@ jobs:
       - name: Create ZIP package
         shell: powershell
         run: |
-          if (Test-Path "Windows_Ingest_Helper_v6.zip") {
-            Remove-Item "Windows_Ingest_Helper_v6.zip" -Force
+          if (Test-Path "Windows_Ingest_Helper_v7.zip") {
+            Remove-Item "Windows_Ingest_Helper_v7.zip" -Force
           }
-          Compress-Archive -Path Windows_Release\* -DestinationPath Windows_Ingest_Helper_v6.zip
+          Compress-Archive -Path Windows_Release\* -DestinationPath Windows_Ingest_Helper_v7.zip
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-v6
-          path: Windows_Ingest_Helper_v6.zip
+          name: windows-release-v7
+          path: Windows_Ingest_Helper_v7.zip
           retention-days: 30
