@@ -25,20 +25,40 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller
 
-      - name: Install ffmpeg via Chocolatey
+      - name: Download ffmpeg official build
         shell: powershell
         run: |
-          choco install ffmpeg -y
-          ffmpeg -version
-          ffprobe -version
-
-      - name: Prepare release directory
-        shell: powershell
-        run: |
+          # 下载 ffmpeg 官方 Windows 构建 (gyan.dev)
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Write-Host "Downloading ffmpeg from: $url"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
+          Write-Host "Download complete, size: $((Get-Item ffmpeg.zip).Length) bytes"
+          
+          # 解压
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extracted -Force
+          Write-Host "Extract complete"
+          
+          # 找到 ffmpeg 目录
+          $ffmpegDir = Get-ChildItem -Path ffmpeg_extracted -Directory -Filter "ffmpeg-*-essentials_build" | Select-Object -First 1
+          Write-Host "Found directory: $($ffmpegDir.Name)"
+          
+          # 创建发布目录
           New-Item -ItemType Directory -Force -Path Windows_Release
           New-Item -ItemType Directory -Force -Path Windows_Release\bin
-          Copy-Item "C:\ProgramData\chocolatey\bin\ffmpeg.exe" "Windows_Release\bin\ffmpeg.exe" -Force
-          Copy-Item "C:\ProgramData\chocolatey\bin\ffprobe.exe" "Windows_Release\bin\ffprobe.exe" -Force
+          
+          # 复制真实的 ffmpeg 二进制
+          Copy-Item "$($ffmpegDir.FullName)\bin\ffmpeg.exe" "Windows_Release\bin\ffmpeg.exe" -Force
+          Copy-Item "$($ffmpegDir.FullName)\bin\ffprobe.exe" "Windows_Release\bin\ffprobe.exe" -Force
+          
+          # 验证文件大小
+          $ffmpegSize = (Get-Item "Windows_Release\bin\ffmpeg.exe").Length
+          $ffprobeSize = (Get-Item "Windows_Release\bin\ffprobe.exe").Length
+          Write-Host "ffmpeg.exe size: $ffmpegSize bytes ([math]::Round($ffmpegSize/1MB, 2)) MB)"
+          Write-Host "ffprobe.exe size: $ffprobeSize bytes ([math]::Round($ffprobeSize/1MB, 2)) MB)"
+          
+          # 清理
+          Remove-Item ffmpeg.zip -Force
+          Remove-Item ffmpeg_extracted -Recurse -Force
 
       - name: Build EXE
         shell: powershell
@@ -59,14 +79,14 @@ jobs:
       - name: Create ZIP package
         shell: powershell
         run: |
-          if (Test-Path "Windows_Ingest_Helper_v5.zip") {
-            Remove-Item "Windows_Ingest_Helper_v5.zip" -Force
+          if (Test-Path "Windows_Ingest_Helper_v6.zip") {
+            Remove-Item "Windows_Ingest_Helper_v6.zip" -Force
           }
-          Compress-Archive -Path Windows_Release\* -DestinationPath Windows_Ingest_Helper_v5.zip
+          Compress-Archive -Path Windows_Release\* -DestinationPath Windows_Ingest_Helper_v6.zip
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-v5
-          path: Windows_Ingest_Helper_v5.zip
+          name: windows-release-v6
+          path: Windows_Ingest_Helper_v6.zip
           retention-days: 30
