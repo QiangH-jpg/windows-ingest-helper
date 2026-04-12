@@ -1,0 +1,72 @@
+name: Build Windows EXE v6
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Install ffmpeg via Chocolatey
+        shell: powershell
+        run: |
+          choco install ffmpeg -y
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Prepare release directory
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path Windows_Release
+          New-Item -ItemType Directory -Force -Path Windows_Release\bin
+          Copy-Item "C:\ProgramData\chocolatey\bin\ffmpeg.exe" "Windows_Release\bin\ffmpeg.exe" -Force
+          Copy-Item "C:\ProgramData\chocolatey\bin\ffprobe.exe" "Windows_Release\bin\ffprobe.exe" -Force
+
+      - name: Build EXE
+        shell: powershell
+        run: |
+          pyinstaller --onefile --windowed --name ingest_helper windows_ingest_helper/main.py
+
+      - name: Copy EXE and docs
+        shell: powershell
+        run: |
+          Copy-Item "dist\ingest_helper.exe" "Windows_Release\ingest_helper.exe" -Force
+          if (Test-Path "windows_ingest_helper\README.txt") {
+            Copy-Item "windows_ingest_helper\README.txt" "Windows_Release\README.txt" -Force
+          }
+          if (Test-Path "windows_ingest_helper\version.txt") {
+            Copy-Item "windows_ingest_helper\version.txt" "Windows_Release\version.txt" -Force
+          }
+
+      - name: Create ZIP package
+        shell: powershell
+        run: |
+          if (Test-Path "Windows_Ingest_Helper_v5.zip") {
+            Remove-Item "Windows_Ingest_Helper_v5.zip" -Force
+          }
+          Compress-Archive -Path Windows_Release\* -DestinationPath Windows_Ingest_Helper_v5.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-v5
+          path: Windows_Ingest_Helper_v5.zip
+          retention-days: 30
