@@ -235,13 +235,14 @@ class IngestHelperGUI:
         self.log("扫描完成")
     
     def get_video_info(self, video_path):
-        """获取视频元数据"""
+        """获取视频元数据（带兼容性回退）"""
         # 调试输出
         self.log(f"\n【调试】获取元数据")
         self.log(f"  文件路径：{video_path}")
         self.log(f"  文件存在：{os.path.exists(video_path)}")
         self.log(f"  ffprobe 命令：{FFPROBE}")
         
+        # 主尝试：标准参数
         cmd = [
             FFPROBE, '-v', 'error',
             '-show_entries', 'stream=width,height,duration,r_frame_rate,codec_name',
@@ -252,7 +253,55 @@ class IngestHelperGUI:
         self.log(f"  完整命令：{' '.join(cmd)}")
         
         try:
-            # 关键修复：必须使用 stdout=subprocess.PIPE 或 capture_output=True
+            result = self._run_ffprobe(cmd)
+            if result:
+                return result
+            
+            # 回退尝试 1：更宽松的参数
+            self.log(f"\n【回退尝试 1】使用更宽松参数")
+            cmd_fallback1 = [
+                FFPROBE, '-v', 'warning',
+                '-show_format', '-show_streams',
+                '-print_format', 'json',
+                video_path
+            ]
+            self.log(f"  完整命令：{' '.join(cmd_fallback1)}")
+            
+            result = self._run_ffprobe(cmd_fallback1)
+            if result:
+                self.log(f"  ✅ 回退尝试 1 成功")
+                return result
+            
+            # 回退尝试 2：只读取基本信息
+            self.log(f"\n【回退尝试 2】只读取基本信息")
+            cmd_fallback2 = [
+                FFPROBE, '-v', 'warning',
+                '-show_entries', 'format=duration,size',
+                '-show_entries', 'stream=width,height,codec_name',
+                '-print_format', 'json',
+                video_path
+            ]
+            self.log(f"  完整命令：{' '.join(cmd_fallback2)}")
+            
+            result = self._run_ffprobe(cmd_fallback2)
+            if result:
+                self.log(f"  ✅ 回退尝试 2 成功")
+                return result
+            
+            # 所有尝试都失败
+            self.log(f"\n  ❌ 所有 ffprobe 尝试都失败")
+            self.log(f"  兼容性警告：该文件可能是特殊格式或已损坏")
+            return None
+            
+        except Exception as e:
+            self.log(f"  ❌ 异常：{type(e).__name__}: {e}")
+            import traceback
+            self.log(f"  堆栈：{traceback.format_exc()}")
+            return None
+    
+    def _run_ffprobe(self, cmd):
+        """执行 ffprobe 并解析结果"""
+        try:
             result = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -264,45 +313,37 @@ class IngestHelperGUI:
             
             # 调试输出
             self.log(f"  返回码：{result.returncode}")
-            self.log(f"  stdout 类型：{type(result.stdout)}")
             self.log(f"  stdout 长度：{len(result.stdout) if result.stdout else 0}")
             self.log(f"  stderr 长度：{len(result.stderr) if result.stderr else 0}")
             
-            if result.stdout:
-                self.log(f"  stdout 前 500 字符：{result.stdout[:500]}")
             if result.stderr:
                 self.log(f"  stderr 前 500 字符：{result.stderr[:500]}")
             
             # 检查 stdout 是否为空
             if not result.stdout or not result.stdout.strip():
-                self.log(f"  ❌ stdout 为空，ffprobe 可能失败")
-                if result.stderr:
-                    self.log(f"  错误信息：{result.stderr}")
+                self.log(f"  ❌ stdout 为空")
                 return None
             
             # 解析 JSON
-            self.log(f"  尝试解析 JSON...")
             try:
                 data = json.loads(result.stdout)
             except json.JSONDecodeError as je:
                 self.log(f"  ❌ JSON 解析失败：{je}")
-                self.log(f"  原始 stdout: {result.stdout[:200]}")
                 return None
-            
-            self.log(f"  ✅ JSON 解析成功")
             
             # 提取数据
-            if not data.get('streams') or not data.get('format'):
-                self.log(f"  ❌ JSON 结构异常：缺少 streams 或 format")
-                return None
-            
-            stream = data.get('streams', [{}])[0]
+            stream = data.get('streams', [{}])[0] if data.get('streams') else {}
             fmt = data.get('format', {})
+            
+            # 检查必要字段
+            if not stream and not fmt:
+                self.log(f"  ❌ JSON 结构异常：缺少 streams 和 format")
+                return None
             
             info = {
                 'width': stream.get('width', 0),
                 'height': stream.get('height', 0),
-                'duration': float(stream.get('duration', 0)),
+                'duration': float(stream.get('duration', 0) or fmt.get('duration', 0)),
                 'fps': stream.get('r_frame_rate', '0/1'),
                 'codec': stream.get('codec_name', 'unknown'),
                 'size': int(fmt.get('size', 0)),
@@ -312,9 +353,7 @@ class IngestHelperGUI:
             return info
             
         except Exception as e:
-            self.log(f"  ❌ 异常：{type(e).__name__}: {e}")
-            import traceback
-            self.log(f"  堆栈：{traceback.format_exc()}")
+            self.log(f"  ❌ _run_ffprobe 异常：{type(e).__name__}: {e}")
             return None
     
     def transcode_all(self):
