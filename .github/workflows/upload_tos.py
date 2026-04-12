@@ -9,7 +9,7 @@ TOS_AK = os.getenv('TOS_AK')
 TOS_SK = os.getenv('TOS_SK')
 
 if not TOS_AK or not TOS_SK:
-    print("❌ Error: TOS secrets not configured")
+    print("Error: TOS secrets not configured")
     print("Please set TOS_AK and TOS_SK in GitHub repository secrets")
     sys.exit(1)
 
@@ -17,7 +17,7 @@ TOS_BUCKET = 'e23-video'
 TOS_REGION = 'cn-beijing'
 TOS_ENDPOINT = f'tos-{TOS_REGION}.volces.com'
 
-print("✅ TOS secrets configured")
+print("TOS secrets configured")
 print(f"Bucket: {TOS_BUCKET}")
 print(f"Region: {TOS_REGION}")
 
@@ -30,8 +30,8 @@ print(f"\nUploading {zip_path} to {tos_key}...")
 
 try:
     client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)
-    print("✅ Upload successful")
+    print("Upload successful")
     print(f"Download URL: https://{TOS_BUCKET}.{TOS_ENDPOINT}/{tos_key}")
 except Exception as e:
-    print(f"❌ Upload failed: {e}")
+    print(f"Upload failed: {e}")
     sys.exit(1)
