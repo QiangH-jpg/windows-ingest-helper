@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Windows Ingest Helper v14
-- 本地素材扫描（读取元数据）
-- 720p proxy 转码（修复 subprocess 管道阻塞）
-- 本地 TOS 上传（修复状态更新 + 详细日志）
-- 修复：GUI 状态联动 + TOS 上传可观测性
+Windows Ingest Helper v15 - 交互体验收口版
+修复：
+1. 扫描阶段后台异步 + 逐条刷新（不再 UI 阻塞）
+2. 恢复短片/坏片筛除逻辑（≤1.5 秒标记跳过）
+3. 上传阶段后台异步 + 实时日志 + 状态联动（不再界面假死）
 """
 
 import os
@@ -25,10 +25,11 @@ try:
 except ImportError:
     TOS_AVAILABLE = False
 
-VERSION = "v14"
-BUILD_TIME = "2026-04-13T15:15:00+08:00"
+VERSION = "v15"
+BUILD_TIME = "2026-04-13T16:30:00+08:00"
 TRANSCODE_TIMEOUT = 300
 MIN_OUTPUT_SIZE = 10240
+MIN_DURATION_SEC = 1.5  # 短片阈值：≤1.5 秒视为坏片
 
 CONFIG_FILE = "config.json"
 MANIFEST_FILE = "manifest.json"
@@ -148,6 +149,8 @@ class IngestHelperApp:
         self.tree_items = {}  # 索引 -> tree item ID
         self.transcode_running = False
         self.transcode_thread = None
+        self.scan_running = False
+        self.upload_running = False
         
         self.create_widgets()
         self.update_config_status()
@@ -182,7 +185,7 @@ class IngestHelperApp:
         btn_frame = ttk.Frame(self.root)
         btn_frame.pack(fill='x', padx=10, pady=10)
         
-        self.scan_btn = ttk.Button(btn_frame, text="1. 扫描素材", command=self.scan_videos)
+        self.scan_btn = ttk.Button(btn_frame, text="1. 扫描素材", command=self.start_scan)
         self.scan_btn.pack(side='left', padx=5)
         
         self.transcode_btn = ttk.Button(btn_frame, text="2. 批量转码", command=self.start_batch_transcode)
@@ -191,7 +194,7 @@ class IngestHelperApp:
         self.stop_btn = ttk.Button(btn_frame, text="停止转码", command=self.stop_transcode, state='disabled')
         self.stop_btn.pack(side='left', padx=5)
         
-        self.upload_btn = ttk.Button(btn_frame, text="3. 上传 TOS", command=self.upload_tos)
+        self.upload_btn = ttk.Button(btn_frame, text="3. 上传 TOS", command=self.start_upload)
         self.upload_btn.pack(side='left', padx=5)
         
         self.save_btn = ttk.Button(btn_frame, text="4. 保存清单", command=self.save_manifest)
@@ -293,7 +296,6 @@ class IngestHelperApp:
             timestamp = datetime.now().strftime("%H:%M:%S")
             self.progress_text.insert('end', f"[{timestamp}] {message}\n")
             self.progress_text.see('end')
-        # 强制在主线程执行
         self.root.after(0, _log)
     
     def update_tree_status(self, index, status):
@@ -303,15 +305,35 @@ class IngestHelperApp:
                 item = self.proxy_files[index]
                 item['status'] = status
                 values = (item['filename'], item.get('duration_fmt', ''), item.get('resolution', ''), item.get('size_fmt', ''), status)
-                tree_item = self.tree.get_children()[index]
-                self.tree.item(tree_item, values=values)
-                self.root.update_idletasks()  # 强制刷新
-        # 强制在主线程执行
+                tree_items = self.tree.get_children()
+                if index < len(tree_items):
+                    tree_item = tree_items[index]
+                    self.tree.item(tree_item, values=values)
+                    self.root.update_idletasks()
         self.root.after(0, _update)
     
-    def scan_videos(self):
+    def add_item_to_tree(self, item, index):
+        """逐条添加素材到列表（用于扫描阶段实时刷新）"""
+        def _add():
+            tree_id = self.tree.insert('', 'end', values=(
+                item['filename'], 
+                item.get('duration_fmt', ''), 
+                item.get('resolution', ''), 
+                item.get('size_fmt', ''), 
+                item['status']
+            ))
+            self.tree_items[index] = tree_id
+            self.root.update_idletasks()
+        self.root.after(0, _add)
+    
+    def start_scan(self):
+        """启动扫描（后台异步）"""
         if not self.source_dir:
             messagebox.showwarning("警告", "请先选择源目录")
+            return
+        
+        if self.scan_running:
+            messagebox.showwarning("警告", "扫描正在进行中")
             return
         
         ffmpeg_exe, ffprobe_exe = get_ffmpeg_path()
@@ -319,39 +341,100 @@ class IngestHelperApp:
             messagebox.showerror("错误", "未找到 ffprobe")
             return
         
-        self.log("=" * 60)
-        self.log("开始扫描素材（读取元数据）")
-        self.log("=" * 60)
+        self.scan_running = True
+        self.scan_btn.config(state='disabled')
         
-        video_extensions = ('.mp4', '.mov', '.avi', '.mkv', '.flv')
+        # 清空现有列表
         self.proxy_files = []
         self.tree_items = {}
-        
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        for root, dirs, files in os.walk(self.source_dir):
-            for file in files:
-                if file.lower().endswith(video_extensions):
-                    full_path = os.path.join(root, file)
-                    metadata = get_video_metadata(full_path, ffprobe_exe)
+        # 启动后台扫描线程
+        scan_thread = threading.Thread(target=self._scan_worker, args=(ffprobe_exe,), daemon=True)
+        scan_thread.start()
+    
+    def _scan_worker(self, ffprobe_exe):
+        """后台扫描工作线程"""
+        try:
+            video_extensions = ('.mp4', '.mov', '.avi', '.mkv', '.flv')
+            index = 0
+            
+            self.log("=" * 60)
+            self.log("开始扫描素材（后台异步 + 逐条刷新）")
+            self.log(f"短片阈值：≤{MIN_DURATION_SEC}秒将标记为跳过")
+            self.log("=" * 60)
+            
+            for root, dirs, files in os.walk(self.source_dir):
+                if not self.scan_running:
+                    self.log("⚠️ 用户取消扫描")
+                    break
                     
-                    if metadata:
-                        duration_fmt = format_duration(metadata['duration'])
-                        resolution = f"{metadata['width']}x{metadata['height']}"
-                        size_fmt = format_file_size(metadata['file_size'])
-                        status = "已读取元数据"
-                    else:
-                        duration_fmt = resolution = size_fmt = ""
-                        status = "无法读取元数据"
-                    
-                    item = {'source_path': full_path, 'filename': file, 'proxy_path': '', 'status': status, 'duration_fmt': duration_fmt, 'resolution': resolution, 'size_fmt': size_fmt}
-                    self.proxy_files.append(item)
-                    tree_id = self.tree.insert('', 'end', values=(file, duration_fmt, resolution, size_fmt, status))
-                    self.tree_items[len(self.proxy_files)-1] = tree_id
+                for file in files:
+                    if not self.scan_running:
+                        break
+                        
+                    if file.lower().endswith(video_extensions):
+                        full_path = os.path.join(root, file)
+                        self.log(f"正在扫描：{file}")
+                        
+                        metadata = get_video_metadata(full_path, ffprobe_exe)
+                        
+                        if metadata:
+                            duration = metadata['duration']
+                            duration_fmt = format_duration(duration)
+                            resolution = f"{metadata['width']}x{metadata['height']}"
+                            size_fmt = format_file_size(metadata['file_size'])
+                            
+                            # 【关键修复】短片/坏片筛除逻辑
+                            if duration <= MIN_DURATION_SEC:
+                                status = f"⚠️ 跳过：时长过短 ({duration_fmt})"
+                                skip_reason = "duration_too_short"
+                            else:
+                                status = "已读取元数据"
+                                skip_reason = None
+                        else:
+                            duration_fmt = resolution = size_fmt = ""
+                            status = "无法读取元数据"
+                            skip_reason = "metadata_read_failed"
+                        
+                        item = {
+                            'source_path': full_path, 
+                            'filename': file, 
+                            'proxy_path': '', 
+                            'status': status, 
+                            'duration_fmt': duration_fmt, 
+                            'resolution': resolution, 
+                            'size_fmt': size_fmt,
+                            'duration': metadata['duration'] if metadata else 0,
+                            'skip_reason': skip_reason
+                        }
+                        self.proxy_files.append(item)
+                        
+                        # 【关键修复】逐条添加到 UI（不再一次性刷出）
+                        self.add_item_to_tree(item, index)
+                        self.log(f"已扫描：{file} - {status}")
+                        index += 1
+            
+            total = len(self.proxy_files)
+            skipped = sum(1 for item in self.proxy_files if item.get('skip_reason'))
+            
+            self.log("=" * 60)
+            self.log(f"扫描完成：共 {total} 个视频文件")
+            if skipped > 0:
+                self.log(f"其中 {skipped} 个因时长过短被标记跳过")
+            self.status_var.set(f"已扫描 {total} 个视频 ({skipped} 个跳过)")
+            
+        except Exception as e:
+            import traceback
+            self.log(f"❌ 扫描线程异常：{e}")
+            self.log(traceback.format_exc()[:500])
         
-        self.log(f"扫描完成：共 {len(self.proxy_files)} 个视频文件")
-        self.status_var.set(f"已扫描 {len(self.proxy_files)} 个视频")
+        finally:
+            def _finish():
+                self.scan_running = False
+                self.scan_btn.config(state='normal')
+            self.root.after(0, _finish)
     
     def start_batch_transcode(self):
         if not self.proxy_files:
@@ -387,6 +470,7 @@ class IngestHelperApp:
             total = len(self.proxy_files)
             success_count = 0
             fail_count = 0
+            skipped_count = 0
             
             self.log("=" * 60)
             self.log("[批量转码入口] 已进入")
@@ -399,12 +483,17 @@ class IngestHelperApp:
                     self.log("⚠️ 用户停止转码")
                     break
                 
+                # 【关键修复】跳过已标记的短片/坏片
+                if item.get('skip_reason'):
+                    skipped_count += 1
+                    self.log(f"[{i+1}/{total}] 跳过：{item['filename']} ({item['skip_reason']})")
+                    continue
+                
                 filename = item['filename']
                 base_name = os.path.splitext(filename)[0]
                 proxy_filename = f"{base_name}_720p.mp4"
                 proxy_path = os.path.join(self.output_dir, proxy_filename)
                 
-                # 【关键修复】立即更新状态为"转码中"
                 self.update_tree_status(i, "转码中...")
                 self.log(f"[{i+1}/{total}] 开始转码：{filename}")
                 
@@ -415,9 +504,8 @@ class IngestHelperApp:
                 if not self.transcode_running:
                     break
                 
-                # 【关键修复】转码完成后立即回写 proxy_path 并更新状态
                 if success:
-                    item['proxy_path'] = proxy_path  # 关键：回写 proxy_path
+                    item['proxy_path'] = proxy_path
                     item['proxy_size'] = result
                     success_count += 1
                     size_str = format_file_size(result)
@@ -429,15 +517,13 @@ class IngestHelperApp:
                     self.log(f"[{i+1}/{total}] ❌ 转码失败：{result}")
             
             self.log("=" * 60)
-            self.log(f"转码完成：成功 {success_count}/{total}, 失败 {fail_count}")
+            self.log(f"转码完成：成功 {success_count}, 失败 {fail_count}, 跳过 {skipped_count}")
             self.status_var.set(f"转码完成：{success_count}/{total}")
             
         except Exception as e:
             import traceback
-            self.log("=" * 60)
             self.log(f"❌ 转码线程异常：{e}")
             self.log(traceback.format_exc()[:500])
-            self.log("=" * 60)
         
         finally:
             def _finish():
@@ -445,7 +531,7 @@ class IngestHelperApp:
                 self.stop_btn.config(state='disabled')
                 self.transcode_btn.config(state='normal')
                 if success_count > 0:
-                    messagebox.showinfo("成功", f"转码完成：\n成功 {success_count}/{total}\n失败 {fail_count}")
+                    messagebox.showinfo("成功", f"转码完成：\n成功 {success_count}\n失败 {fail_count}\n跳过 {skipped_count}")
             self.root.after(0, _finish)
     
     def _transcode_single(self, video_path, output_path, ffmpeg_exe, filename, start_time):
@@ -494,8 +580,8 @@ class IngestHelperApp:
         self.transcode_running = False
         self.log("正在停止转码...")
     
-    def upload_tos(self):
-        """上传 TOS（修复：详细日志 + 状态联动）"""
+    def start_upload(self):
+        """启动上传（后台异步）"""
         if not self.proxy_files:
             messagebox.showwarning("警告", "请先扫描素材")
             return
@@ -508,6 +594,10 @@ class IngestHelperApp:
             messagebox.showerror("错误", "TOS SDK 未安装")
             return
         
+        if self.upload_running:
+            messagebox.showwarning("警告", "上传正在进行中")
+            return
+        
         # 统计待上传文件
         upload_files = [(i, item) for i, item in enumerate(self.proxy_files) 
                        if item.get('proxy_path') and os.path.exists(item['proxy_path'])]
@@ -516,62 +606,96 @@ class IngestHelperApp:
             messagebox.showwarning("警告", "没有已转码的文件可上传\n\n请先执行批量转码")
             return
         
-        self.log("=" * 60)
-        self.log("[上传入口] 已进入")
-        self.log(f"[待上传总数] {len(upload_files)}")
-        self.log(f"[Bucket] {self.config['bucket']}")
-        self.log(f"[Region] {self.config['region']}")
-        self.log(f"[Endpoint] {self.config['endpoint']}")
-        self.log("=" * 60)
+        self.upload_running = True
+        self.upload_btn.config(state='disabled')
         
-        upload_count = 0
-        fail_count = 0
+        # 启动后台上传线程
+        upload_thread = threading.Thread(target=self._upload_worker, args=(upload_files,), daemon=True)
+        upload_thread.start()
+    
+    def _upload_worker(self, upload_files):
+        """后台上传工作线程"""
+        try:
+            self.log("=" * 60)
+            self.log("[上传入口] 已进入")
+            self.log(f"[待上传总数] {len(upload_files)}")
+            self.log(f"[Bucket] {self.config['bucket']}")
+            self.log(f"[Region] {self.config['region']}")
+            self.log(f"[Endpoint] {self.config['endpoint']}")
+            self.log("=" * 60)
+            
+            upload_count = 0
+            fail_count = 0
+            
+            for idx, (i, item) in enumerate(upload_files):
+                if not self.upload_running:
+                    self.log("⚠️ 用户取消上传")
+                    break
+                    
+                filename = item['filename']
+                
+                # 【关键修复】更新状态为"上传中"
+                self.update_tree_status(i, "上传中...")
+                self.log(f"[{idx+1}/{len(upload_files)}] 开始上传：{filename}")
+                
+                # 生成 TOS key
+                file_hash = hashlib.md5(open(item['proxy_path'], 'rb').read()).hexdigest()[:8]
+                tos_key = f"windows_ingest/{datetime.now().strftime('%Y%m%d')}/{file_hash}_{os.path.basename(item['proxy_path'])}"
+                
+                self.log(f"[{idx+1}/{len(upload_files)}] 目标 key：{tos_key}")
+                
+                # 执行上传
+                success, result = upload_to_tos(item['proxy_path'], tos_key, self.config)
+                
+                if success:
+                    item['tos_key'] = tos_key
+                    item['tos_url'] = result
+                    item['upload_status'] = 'completed'
+                    upload_count += 1
+                    # 【关键修复】更新状态为"已上传"
+                    self.update_tree_status(i, "✅ 已上传")
+                    self.log(f"[{idx+1}/{len(upload_files)}] ✅ 上传成功")
+                    self.log(f"  URL: {result}")
+                else:
+                    fail_count += 1
+                    self.update_tree_status(i, f"❌ 上传失败")
+                    self.log(f"[{idx+1}/{len(upload_files)}] ❌ 上传失败：{result}")
+            
+            self.log("=" * 60)
+            self.log(f"上传完成：成功 {upload_count}, 失败 {fail_count}")
+            self.status_var.set(f"TOS 上传完成：{upload_count}")
+            
+        except Exception as e:
+            import traceback
+            self.log(f"❌ 上传线程异常：{e}")
+            self.log(traceback.format_exc()[:500])
         
-        for idx, (i, item) in enumerate(upload_files):
-            filename = item['filename']
-            
-            # 【关键修复】更新状态为"上传中"
-            self.update_tree_status(i, "上传中...")
-            self.log(f"[{idx+1}/{len(upload_files)}] 开始上传：{filename}")
-            
-            # 生成 TOS key
-            file_hash = hashlib.md5(open(item['proxy_path'], 'rb').read()).hexdigest()[:8]
-            tos_key = f"windows_ingest/{datetime.now().strftime('%Y%m%d')}/{file_hash}_{os.path.basename(item['proxy_path'])}"
-            
-            self.log(f"[{idx+1}/{len(upload_files)}] 目标 key：{tos_key}")
-            
-            # 执行上传
-            success, result = upload_to_tos(item['proxy_path'], tos_key, self.config)
-            
-            if success:
-                item['tos_key'] = tos_key
-                item['tos_url'] = result
-                item['upload_status'] = 'completed'
-                upload_count += 1
-                # 【关键修复】更新状态为"已上传"
-                self.update_tree_status(i, "✅ 已上传")
-                self.log(f"[{idx+1}/{len(upload_files)}] ✅ 上传成功")
-                self.log(f"  URL: {result}")
-            else:
-                fail_count += 1
-                self.update_tree_status(i, f"❌ 上传失败")
-                self.log(f"[{idx+1}/{len(upload_files)}] ❌ 上传失败：{result}")
-        
-        self.log("=" * 60)
-        self.log(f"上传完成：成功 {upload_count}, 失败 {fail_count}")
-        self.status_var.set(f"TOS 上传完成：{upload_count}")
-        
-        if upload_count > 0:
-            messagebox.showinfo("成功", f"成功上传 {upload_count} 个文件到 TOS")
+        finally:
+            def _finish():
+                self.upload_running = False
+                self.upload_btn.config(state='normal')
+                if upload_count > 0:
+                    messagebox.showinfo("成功", f"成功上传 {upload_count} 个文件到 TOS")
+            self.root.after(0, _finish)
+    
+    def upload_tos(self):
+        """兼容旧调用（已废弃，使用 start_upload）"""
+        self.start_upload()
+    
+    @property
+    def manifest(self):
+        return {
+            'version': VERSION,
+            'build_time': BUILD_TIME,
+            'source_dir': self.source_dir,
+            'output_dir': self.output_dir,
+            'files': self.proxy_files
+        }
     
     def save_manifest(self):
         if not self.output_dir:
             messagebox.showwarning("警告", "请先选择输出目录")
             return
-        
-        self.manifest['files'] = self.proxy_files
-        self.manifest['created_at'] = datetime.now().isoformat()
-        self.manifest['config'] = {'bucket': self.config['bucket'], 'region': self.config['region']}
         
         manifest_path = os.path.join(self.output_dir, MANIFEST_FILE)
         try:
