@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Windows Ingest Helper v13
+Windows Ingest Helper v14
 - 本地素材扫描（读取元数据）
-- 720p proxy 转码（修复 subprocess 管道阻塞问题）
-- 本地 TOS 上传
-- 修复：ffmpeg 子进程生命周期管理 + 管道阻塞
+- 720p proxy 转码（修复 subprocess 管道阻塞）
+- 本地 TOS 上传（修复状态更新 + 详细日志）
+- 修复：GUI 状态联动 + TOS 上传可观测性
 """
 
 import os
@@ -25,10 +25,10 @@ try:
 except ImportError:
     TOS_AVAILABLE = False
 
-VERSION = "v13"
-BUILD_TIME = "2026-04-13T14:00:00+08:00"
-TRANSCODE_TIMEOUT = 300  # 单文件超时 5 分钟
-MIN_OUTPUT_SIZE = 10240  # 最小输出文件大小 10KB
+VERSION = "v14"
+BUILD_TIME = "2026-04-13T15:15:00+08:00"
+TRANSCODE_TIMEOUT = 300
+MIN_OUTPUT_SIZE = 10240
 
 CONFIG_FILE = "config.json"
 MANIFEST_FILE = "manifest.json"
@@ -145,6 +145,7 @@ class IngestHelperApp:
         self.source_dir = ""
         self.output_dir = ""
         self.proxy_files = []
+        self.tree_items = {}  # 索引 -> tree item ID
         self.transcode_running = False
         self.transcode_thread = None
         
@@ -292,22 +293,21 @@ class IngestHelperApp:
             timestamp = datetime.now().strftime("%H:%M:%S")
             self.progress_text.insert('end', f"[{timestamp}] {message}\n")
             self.progress_text.see('end')
-        if threading.current_thread() is threading.main_thread():
-            _log()
-        else:
-            self.root.after(0, _log)
+        # 强制在主线程执行
+        self.root.after(0, _log)
     
     def update_tree_status(self, index, status):
+        """强制更新列表状态"""
         def _update():
             if 0 <= index < len(self.proxy_files):
                 item = self.proxy_files[index]
                 item['status'] = status
                 values = (item['filename'], item.get('duration_fmt', ''), item.get('resolution', ''), item.get('size_fmt', ''), status)
-                self.tree.item(index, values=values)
-        if threading.current_thread() is threading.main_thread():
-            _update()
-        else:
-            self.root.after(0, _update)
+                tree_item = self.tree.get_children()[index]
+                self.tree.item(tree_item, values=values)
+                self.root.update_idletasks()  # 强制刷新
+        # 强制在主线程执行
+        self.root.after(0, _update)
     
     def scan_videos(self):
         if not self.source_dir:
@@ -325,6 +325,7 @@ class IngestHelperApp:
         
         video_extensions = ('.mp4', '.mov', '.avi', '.mkv', '.flv')
         self.proxy_files = []
+        self.tree_items = {}
         
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -346,7 +347,8 @@ class IngestHelperApp:
                     
                     item = {'source_path': full_path, 'filename': file, 'proxy_path': '', 'status': status, 'duration_fmt': duration_fmt, 'resolution': resolution, 'size_fmt': size_fmt}
                     self.proxy_files.append(item)
-                    self.tree.insert('', 'end', values=(file, duration_fmt, resolution, size_fmt, status))
+                    tree_id = self.tree.insert('', 'end', values=(file, duration_fmt, resolution, size_fmt, status))
+                    self.tree_items[len(self.proxy_files)-1] = tree_id
         
         self.log(f"扫描完成：共 {len(self.proxy_files)} 个视频文件")
         self.status_var.set(f"已扫描 {len(self.proxy_files)} 个视频")
@@ -390,7 +392,6 @@ class IngestHelperApp:
             self.log("[批量转码入口] 已进入")
             self.log(f"[任务总数] {total}")
             self.log(f"[输出目录] {self.output_dir}")
-            self.log(f"[超时时间] {TRANSCODE_TIMEOUT}秒/文件")
             self.log("=" * 60)
             
             for i, item in enumerate(self.proxy_files):
@@ -403,9 +404,9 @@ class IngestHelperApp:
                 proxy_filename = f"{base_name}_720p.mp4"
                 proxy_path = os.path.join(self.output_dir, proxy_filename)
                 
-                self.log(f"[{i+1}/{total}] 开始转码：{filename}")
-                self.log(f"[{i+1}/{total}] 输出路径：{proxy_path}")
+                # 【关键修复】立即更新状态为"转码中"
                 self.update_tree_status(i, "转码中...")
+                self.log(f"[{i+1}/{total}] 开始转码：{filename}")
                 
                 start_time = time.time()
                 success, result = self._transcode_single(item['source_path'], proxy_path, ffmpeg_exe, filename, start_time)
@@ -414,16 +415,17 @@ class IngestHelperApp:
                 if not self.transcode_running:
                     break
                 
+                # 【关键修复】转码完成后立即回写 proxy_path 并更新状态
                 if success:
-                    item['proxy_path'] = proxy_path
+                    item['proxy_path'] = proxy_path  # 关键：回写 proxy_path
                     item['proxy_size'] = result
                     success_count += 1
                     size_str = format_file_size(result)
-                    self.update_tree_status(i, f"✅ 成功 ({size_str})")
+                    self.update_tree_status(i, f"✅ 转码成功")
                     self.log(f"[{i+1}/{total}] ✅ 转码成功：{size_str} (耗时{elapsed:.1f}秒)")
                 else:
                     fail_count += 1
-                    self.update_tree_status(i, f"❌ 失败")
+                    self.update_tree_status(i, f"❌ 转码失败")
                     self.log(f"[{i+1}/{total}] ❌ 转码失败：{result}")
             
             self.log("=" * 60)
@@ -432,10 +434,9 @@ class IngestHelperApp:
             
         except Exception as e:
             import traceback
-            error_trace = traceback.format_exc()
             self.log("=" * 60)
             self.log(f"❌ 转码线程异常：{e}")
-            self.log(error_trace)
+            self.log(traceback.format_exc()[:500])
             self.log("=" * 60)
         
         finally:
@@ -448,9 +449,7 @@ class IngestHelperApp:
             self.root.after(0, _finish)
     
     def _transcode_single(self, video_path, output_path, ffmpeg_exe, filename, start_time):
-        """转码单个文件（修复管道阻塞问题）"""
         try:
-            # 构建 ffmpeg 命令
             cmd = [
                 ffmpeg_exe, '-i', video_path,
                 '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
@@ -458,27 +457,18 @@ class IngestHelperApp:
                 '-c:a', 'aac', '-b:a', '128k', '-y', output_path
             ]
             
-            self.log(f"  [ffmpeg 命令] {' '.join(cmd[:3])} ... (完整命令共{len(cmd)}个参数)")
-            
-            # Windows 特有：隐藏控制台窗口
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creationflags = subprocess.CREATE_NO_WINDOW
             
-            # 【关键修复】不捕获 stdout，只捕获 stderr
-            # 原因：捕获 stdout 会导致管道缓冲区满，ffmpeg 阻塞
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,  # 不捕获 stdout
-                stderr=subprocess.PIPE,     # 只捕获 stderr 用于错误诊断
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 startupinfo=startupinfo,
                 creationflags=creationflags
             )
             
-            self.log(f"  [subprocess] 已启动 (PID: {process.pid})")
-            
-            # 使用 communicate 等待完成，带超时
-            # 【关键修复】communicate 会自动处理管道，避免阻塞
             try:
                 _, stderr_data = process.communicate(timeout=TRANSCODE_TIMEOUT)
             except subprocess.TimeoutExpired:
@@ -486,59 +476,71 @@ class IngestHelperApp:
                 process.wait(timeout=5)
                 return False, f"超时 ({TRANSCODE_TIMEOUT}秒)"
             
-            # 检查结果
             if process.returncode == 0 and os.path.exists(output_path):
                 output_size = os.path.getsize(output_path)
-                
-                # 检查文件大小是否合理
                 if output_size < MIN_OUTPUT_SIZE:
-                    self.log(f"  [输出检测] 文件过小 ({output_size} 字节 < {MIN_OUTPUT_SIZE} 字节)")
                     return False, f"输出文件过小 ({output_size} 字节)"
-                
-                self.log(f"  [输出检测] 文件已生成 ({format_file_size(output_size)})")
                 return True, output_size
             else:
-                stderr_str = stderr_data.decode('utf-8', errors='ignore')[:500] if stderr_data else "无错误输出"
-                self.log(f"  [输出检测] 文件未生成")
-                self.log(f"  [ffmpeg 返回码] {process.returncode}")
-                self.log(f"  [ffmpeg stderr] {stderr_str}")
+                stderr_str = stderr_data.decode('utf-8', errors='ignore')[:200] if stderr_data else "无错误输出"
                 return False, stderr_str or f"返回码：{process.returncode}"
                 
         except FileNotFoundError as e:
             return False, f"ffmpeg 未找到：{e}"
         except Exception as e:
-            import traceback
-            return False, f"异常：{e}\n{traceback.format_exc()[:200]}"
+            return False, f"异常：{e}"
     
     def stop_transcode(self):
         self.transcode_running = False
         self.log("正在停止转码...")
     
     def upload_tos(self):
+        """上传 TOS（修复：详细日志 + 状态联动）"""
         if not self.proxy_files:
             messagebox.showwarning("警告", "请先扫描素材")
             return
+        
         if not self.config['tos_ak'] or not self.config['tos_sk']:
             messagebox.showerror("错误", '未配置本地 TOS 上传凭据！')
             return
+        
         if not TOS_AVAILABLE:
             messagebox.showerror("错误", "TOS SDK 未安装")
             return
         
+        # 统计待上传文件
+        upload_files = [(i, item) for i, item in enumerate(self.proxy_files) 
+                       if item.get('proxy_path') and os.path.exists(item['proxy_path'])]
+        
+        if not upload_files:
+            messagebox.showwarning("警告", "没有已转码的文件可上传\n\n请先执行批量转码")
+            return
+        
         self.log("=" * 60)
-        self.log("开始上传 TOS")
+        self.log("[上传入口] 已进入")
+        self.log(f"[待上传总数] {len(upload_files)}")
+        self.log(f"[Bucket] {self.config['bucket']}")
+        self.log(f"[Region] {self.config['region']}")
+        self.log(f"[Endpoint] {self.config['endpoint']}")
         self.log("=" * 60)
         
         upload_count = 0
-        for i, item in enumerate(self.proxy_files):
-            if not item.get('proxy_path') or not os.path.exists(item['proxy_path']):
-                continue
+        fail_count = 0
+        
+        for idx, (i, item) in enumerate(upload_files):
+            filename = item['filename']
             
+            # 【关键修复】更新状态为"上传中"
             self.update_tree_status(i, "上传中...")
-            self.log(f"上传：{item['filename']}")
+            self.log(f"[{idx+1}/{len(upload_files)}] 开始上传：{filename}")
             
+            # 生成 TOS key
             file_hash = hashlib.md5(open(item['proxy_path'], 'rb').read()).hexdigest()[:8]
             tos_key = f"windows_ingest/{datetime.now().strftime('%Y%m%d')}/{file_hash}_{os.path.basename(item['proxy_path'])}"
+            
+            self.log(f"[{idx+1}/{len(upload_files)}] 目标 key：{tos_key}")
+            
+            # 执行上传
             success, result = upload_to_tos(item['proxy_path'], tos_key, self.config)
             
             if success:
@@ -546,14 +548,19 @@ class IngestHelperApp:
                 item['tos_url'] = result
                 item['upload_status'] = 'completed'
                 upload_count += 1
+                # 【关键修复】更新状态为"已上传"
                 self.update_tree_status(i, "✅ 已上传")
-                self.log(f"  ✅ {result}")
+                self.log(f"[{idx+1}/{len(upload_files)}] ✅ 上传成功")
+                self.log(f"  URL: {result}")
             else:
-                self.update_tree_status(i, "❌ 上传失败")
-                self.log(f"  ❌ {result}")
+                fail_count += 1
+                self.update_tree_status(i, f"❌ 上传失败")
+                self.log(f"[{idx+1}/{len(upload_files)}] ❌ 上传失败：{result}")
         
-        self.log(f"上传完成：{upload_count} 个文件")
+        self.log("=" * 60)
+        self.log(f"上传完成：成功 {upload_count}, 失败 {fail_count}")
         self.status_var.set(f"TOS 上传完成：{upload_count}")
+        
         if upload_count > 0:
             messagebox.showinfo("成功", f"成功上传 {upload_count} 个文件到 TOS")
     
