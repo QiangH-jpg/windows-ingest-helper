@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Windows Ingest Helper v9
+Windows Ingest Helper v10
 - 本地素材扫描
 - 720p proxy 转码
 - 本地 TOS 上传（支持配置文件）
+- 修复：ffmpeg 路径定位逻辑（v9 修复版）
 """
 
 import os
@@ -22,8 +23,8 @@ try:
 except ImportError:
     TOS_AVAILABLE = False
 
-VERSION = "v9"
-BUILD_TIME = "2026-04-13T09:30:00+08:00"
+VERSION = "v10"
+BUILD_TIME = "2026-04-13T10:35:00+08:00"
 
 CONFIG_FILE = "config.json"
 MANIFEST_FILE = "manifest.json"
@@ -65,21 +66,70 @@ def save_config(config):
 
 
 def get_ffmpeg_path():
-    """获取 ffmpeg 路径"""
+    """
+    获取 ffmpeg 和 ffprobe 路径
+    
+    优先级：
+    1. exe 所在目录/bin/ffmpeg.exe（打包后环境）
+    2. 脚本所在目录/bin/ffmpeg.exe（开发环境）
+    3. 系统 PATH（最后回退）
+    """
+    # 调试输出
+    print("=" * 60)
+    print("FFmpeg 路径诊断")
+    print("=" * 60)
+    print(f"sys.executable = {sys.executable}")
+    print(f"sys.argv[0] = {sys.argv[0]}")
+    print(f"os.getcwd() = {os.getcwd()}")
+    
+    # 判断是否为打包环境
     if getattr(sys, 'frozen', False):
-        # 打包后环境
-        base_path = sys._MEIPASS
-        bin_path = os.path.join(base_path, 'bin')
-        ffmpeg_exe = os.path.join(bin_path, 'ffmpeg.exe')
-        ffprobe_exe = os.path.join(bin_path, 'ffprobe.exe')
-        if os.path.exists(ffmpeg_exe) and os.path.exists(ffprobe_exe):
-            return ffmpeg_exe, ffprobe_exe
-    # 开发环境
-    bin_path = os.path.join(os.path.dirname(__file__), 'bin')
-    ffmpeg_exe = os.path.join(bin_path, 'ffmpeg.exe')
-    ffprobe_exe = os.path.join(bin_path, 'ffprobe.exe')
-    if os.path.exists(ffmpeg_exe) and os.path.exists(ffprobe_exe):
-        return ffmpeg_exe, ffprobe_exe
+        # PyInstaller 打包后：exe 所在目录
+        exe_dir = os.path.dirname(sys.executable)
+        print(f"【打包环境】exe_dir = {exe_dir}")
+    else:
+        # 开发环境：脚本所在目录
+        exe_dir = os.path.dirname(os.path.abspath(__file__))
+        print(f"【开发环境】script_dir = {exe_dir}")
+    
+    bin_dir = os.path.join(exe_dir, 'bin')
+    ffmpeg_path = os.path.join(bin_dir, 'ffmpeg.exe')
+    ffprobe_path = os.path.join(bin_dir, 'ffprobe.exe')
+    
+    print(f"检查 bin 目录：{bin_dir}")
+    print(f"ffmpeg_path = {ffmpeg_path}")
+    print(f"ffmpeg_exists = {os.path.exists(ffmpeg_path)}")
+    print(f"ffprobe_path = {ffprobe_path}")
+    print(f"ffprobe_exists = {os.path.exists(ffprobe_path)}")
+    
+    # 如果 bin 目录存在且包含 ffmpeg，直接返回
+    if os.path.exists(ffmpeg_path) and os.path.exists(ffprobe_path):
+        print(f"✅ 找到 ffmpeg 和 ffprobe：{bin_dir}")
+        return ffmpeg_path, ffprobe_path
+    
+    # 回退：检查 _MEIPASS（PyInstaller 临时目录）
+    if getattr(sys, '_MEIPASS', None):
+        meipass = sys._MEIPASS
+        print(f"【检查 _MEIPASS】{meipass}")
+        meipass_bin = os.path.join(meipass, 'bin')
+        meipass_ffmpeg = os.path.join(meipass_bin, 'ffmpeg.exe')
+        meipass_ffprobe = os.path.join(meipass_bin, 'ffprobe.exe')
+        if os.path.exists(meipass_ffmpeg) and os.path.exists(meipass_ffprobe):
+            print(f"✅ 在 _MEIPASS 找到：{meipass_bin}")
+            return meipass_ffmpeg, meipass_ffprobe
+    
+    # 最后回退：系统 PATH
+    print("【回退】检查系统 PATH")
+    ffmpeg_in_path = subprocess._optim_args_from_interpreter_flags() if hasattr(subprocess, '_optim_args_from_interpreter_flags') else None
+    try:
+        result = subprocess.run(['where', 'ffmpeg.exe'], capture_output=True, text=True, shell=True)
+        if result.returncode == 0:
+            print(f"✅ 在 PATH 中找到：{result.stdout.strip()}")
+            return 'ffmpeg.exe', 'ffprobe.exe'  # 依赖 PATH
+    except:
+        pass
+    
+    print("❌ 未找到 ffmpeg 和 ffprobe")
     return None, None
 
 
@@ -193,7 +243,7 @@ class IngestHelperApp:
         ttk.Button(btn_frame, text="保存清单", command=self.save_manifest).pack(side='left', padx=5)
         
         # 进度
-        progress_frame = ttk.LabelFrame(self.root, text="进度", padding=10)
+        progress_frame = ttk.LabelFrame(self.root, text="进度/日志", padding=10)
         progress_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
         self.progress_text = tk.Text(progress_frame, height=20, wrap='word')
@@ -209,7 +259,6 @@ class IngestHelperApp:
     def update_config_status(self):
         """更新配置状态显示"""
         if self.config['tos_ak'] and self.config['tos_sk']:
-            self.config_status_var.set(f"✅ TOS 配置：{self.config['bucket']}")
             self.config_status_var.set(f"✅ TOS 配置：{self.config['bucket']} @ {self.config['region']}")
         else:
             self.config_status_var.set("⚠️ 未配置 TOS 上传凭据（点击'上传配置'设置）")
@@ -330,10 +379,25 @@ class IngestHelperApp:
             messagebox.showwarning("警告", "请先选择输出目录")
             return
         
+        # 获取 ffmpeg 路径（带调试输出）
+        self.log("=" * 60)
+        self.log("FFmpeg 路径诊断")
         ffmpeg_exe, ffprobe_exe = get_ffmpeg_path()
+        
         if not ffmpeg_exe:
-            messagebox.showerror("错误", "未找到 ffmpeg，请确保 bin/ffmpeg.exe 存在")
+            self.log("❌ 未找到 ffmpeg，请确保 bin/ffmpeg.exe 存在")
+            messagebox.showerror("错误", 
+                "未找到 ffmpeg！\n\n"
+                "请确保解压后的目录结构为：\n"
+                "  ingest_helper_v10.exe\n"
+                "  bin/\n"
+                "    ffmpeg.exe\n"
+                "    ffprobe.exe")
             return
+        
+        self.log(f"✅ 使用 ffmpeg: {ffmpeg_exe}")
+        self.log(f"✅ 使用 ffprobe: {ffprobe_exe}")
+        self.log("=" * 60)
         
         self.log("开始批量转码...")
         success_count = 0
@@ -354,6 +418,9 @@ class IngestHelperApp:
         
         self.log(f"转码完成：{success_count}/{len(self.proxy_files)} 成功")
         self.status_var.set(f"转码完成：{success_count}/{len(self.proxy_files)}")
+        
+        if success_count > 0:
+            messagebox.showinfo("成功", f"转码完成：{success_count}/{len(self.proxy_files)}")
     
     def upload_tos(self):
         """上传 TOS"""
