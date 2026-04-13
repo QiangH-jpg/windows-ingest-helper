@@ -212,7 +212,7 @@ class IngestHelperApp:
             self.config_status_var.set(f"✅ TOS 配置：{self.config['bucket']}")
             self.config_status_var.set(f"✅ TOS 配置：{self.config['bucket']} @ {self.config['region']}")
         else:
-            self.config_status_var.set("⚠️ 未配置 TOS 上传凭据（点击"上传配置"设置）")
+            self.config_status_var.set("⚠️ 未配置 TOS 上传凭据（点击'上传配置'设置）")
     
     def show_config_dialog(self):
         """显示配置对话框"""
@@ -364,13 +364,13 @@ class IngestHelperApp:
         # 检查配置
         if not self.config['tos_ak'] or not self.config['tos_sk']:
             messagebox.showerror("错误", 
-                "未配置本地 TOS 上传凭据！\n\n"
-                "请点击右上角"上传配置"按钮，填写：\n"
-                "- TOS Access Key (AK)\n"
-                "- TOS Secret Key (SK)\n"
-                "- Bucket\n"
-                "- Region\n"
-                "- Endpoint")
+                '未配置本地 TOS 上传凭据！\n\n'
+                '请点击右上角"上传配置"按钮，填写：\n'
+                '- TOS Access Key (AK)\n'
+                '- TOS Secret Key (SK)\n'
+                '- Bucket\n'
+                '- Region\n'
+                '- Endpoint')
             return
         
         if not TOS_AVAILABLE:
