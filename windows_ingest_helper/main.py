@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Windows Ingest Helper v11
+Windows Ingest Helper v12
 - 本地素材扫描（读取元数据）
-- 720p proxy 转码（后台静默，不弹黑框）
+- 720p proxy 转码（异步执行 + 实时进度反馈）
 - 本地 TOS 上传
-- 修复：ffmpeg 路径定位 + 恢复旧版可理解交互
+- 修复：批量转码实时可观测性 + 心跳超时机制
 """
 
 import os
@@ -14,6 +14,9 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import subprocess
 import hashlib
+import threading
+import queue
+import time
 from datetime import datetime
 
 # TOS SDK
@@ -23,11 +26,13 @@ try:
 except ImportError:
     TOS_AVAILABLE = False
 
-VERSION = "v11"
-BUILD_TIME = "2026-04-13T11:00:00+08:00"
+VERSION = "v12"
+BUILD_TIME = "2026-04-13T11:25:00+08:00"
 
 CONFIG_FILE = "config.json"
 MANIFEST_FILE = "manifest.json"
+TRANSCODE_TIMEOUT = 300  # 单文件超时 5 分钟
+HEARTBEAT_INTERVAL = 30  # 心跳间隔 30 秒
 
 DEFAULT_CONFIG = {
     "tos_ak": "",
@@ -66,55 +71,37 @@ def save_config(config):
 
 def get_ffmpeg_path():
     """获取 ffmpeg 和 ffprobe 路径（带调试输出）"""
-    print("=" * 60)
-    print("FFmpeg 路径诊断")
-    print("=" * 60)
-    print(f"sys.executable = {sys.executable}")
-    print(f"os.getcwd() = {os.getcwd()}")
-    
     if getattr(sys, 'frozen', False):
         exe_dir = os.path.dirname(sys.executable)
-        print(f"【打包环境】exe_dir = {exe_dir}")
     else:
         exe_dir = os.path.dirname(os.path.abspath(__file__))
-        print(f"【开发环境】script_dir = {exe_dir}")
     
     bin_dir = os.path.join(exe_dir, 'bin')
     ffmpeg_path = os.path.join(bin_dir, 'ffmpeg.exe')
     ffprobe_path = os.path.join(bin_dir, 'ffprobe.exe')
     
-    print(f"检查 bin 目录：{bin_dir}")
-    print(f"ffmpeg_path = {ffmpeg_path}")
-    print(f"ffmpeg_exists = {os.path.exists(ffmpeg_path)}")
-    print(f"ffprobe_path = {ffprobe_path}")
-    print(f"ffprobe_exists = {os.path.exists(ffprobe_path)}")
-    
     if os.path.exists(ffmpeg_path) and os.path.exists(ffprobe_path):
-        print(f"✅ 找到 ffmpeg 和 ffprobe")
         return ffmpeg_path, ffprobe_path
     
-    print("❌ 未找到 ffmpeg 和 ffprobe")
     return None, None
 
 
 def get_video_metadata(video_path, ffprobe_exe):
-    """读取视频元数据（时长、分辨率、文件大小）"""
+    """读取视频元数据"""
     try:
         file_size = os.path.getsize(video_path)
-        
         cmd = [
             ffprobe_exe, '-v', 'quiet', '-print_format', 'json',
             '-show_streams', '-show_format', video_path
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, 
-                               creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
         
         if result.returncode != 0:
             return None
         
         data = json.loads(result.stdout)
-        
-        # 获取视频流信息
         video_stream = None
         for stream in data.get('streams', []):
             if stream.get('codec_type') == 'video':
@@ -137,43 +124,23 @@ def get_video_metadata(video_path, ffprobe_exe):
             'codec': codec
         }
     except Exception as e:
-        print(f"读取元数据失败：{e}")
         return None
 
 
-def transcode_to_proxy(video_path, output_path, ffmpeg_exe, log_callback=None):
-    """
-    转码为 720p proxy（后台静默执行，不弹黑框）
-    """
-    # 使用 CREATE_NO_WINDOW 标志（Windows 特有）避免弹出控制台窗口
-    startupinfo = None
-    creationflags = 0
-    
-    if sys.platform == 'win32':
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        creationflags = subprocess.CREATE_NO_WINDOW
-    
-    cmd = [
-        ffmpeg_exe, '-i', video_path,
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '28',
-        '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-y',
-        output_path
-    ]
-    
-    result = subprocess.run(cmd, capture_output=True, text=True, 
-                           startupinfo=startupinfo, creationflags=creationflags)
-    
-    if result.returncode == 0 and os.path.exists(output_path):
-        output_size = os.path.getsize(output_path)
-        return True, output_size
-    else:
-        return False, result.stderr[:200] if result.stderr else "未知错误"
+def format_file_size(size_bytes):
+    """格式化文件大小"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f}{unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f}TB"
+
+
+def format_duration(seconds):
+    """格式化时长"""
+    mins = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{mins}:{secs:02d}"
 
 
 def upload_to_tos(file_path, tos_key, config):
@@ -200,22 +167,6 @@ def upload_to_tos(file_path, tos_key, config):
         return False, str(e)
 
 
-def format_file_size(size_bytes):
-    """格式化文件大小"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f}{unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f}TB"
-
-
-def format_duration(seconds):
-    """格式化时长"""
-    mins = int(seconds // 60)
-    secs = int(seconds % 60)
-    return f"{mins}:{secs:02d}"
-
-
 class IngestHelperApp:
     def __init__(self, root):
         self.root = root
@@ -226,7 +177,12 @@ class IngestHelperApp:
         self.source_dir = ""
         self.output_dir = ""
         self.proxy_files = []
-        self.manifest = {"files": [], "created_at": "", "version": VERSION}
+        self.tree_items = {}  # 索引映射
+        
+        # 转码任务控制
+        self.transcode_running = False
+        self.transcode_queue = queue.Queue()
+        self.transcode_thread = None
         
         self.create_widgets()
         self.update_config_status()
@@ -252,7 +208,6 @@ class IngestHelperApp:
         dir_frame = ttk.LabelFrame(self.root, text="目录设置", padding=10)
         dir_frame.pack(fill='x', padx=10, pady=5)
         
-        # 源目录
         source_frame = ttk.Frame(dir_frame)
         source_frame.pack(fill='x', pady=5)
         ttk.Label(source_frame, text="源目录:", width=10).pack(side='left')
@@ -260,7 +215,6 @@ class IngestHelperApp:
         ttk.Entry(source_frame, textvariable=self.source_var, width=60).pack(side='left', padx=5)
         ttk.Button(source_frame, text="浏览", command=self.browse_source).pack(side='left')
         
-        # 输出目录
         output_frame = ttk.Frame(dir_frame)
         output_frame.pack(fill='x', pady=5)
         ttk.Label(output_frame, text="输出目录:", width=10).pack(side='left')
@@ -275,8 +229,11 @@ class IngestHelperApp:
         self.scan_btn = ttk.Button(btn_frame, text="1. 扫描素材", command=self.scan_videos)
         self.scan_btn.pack(side='left', padx=5)
         
-        self.transcode_btn = ttk.Button(btn_frame, text="2. 批量转码", command=self.batch_transcode)
+        self.transcode_btn = ttk.Button(btn_frame, text="2. 批量转码", command=self.start_batch_transcode)
         self.transcode_btn.pack(side='left', padx=5)
+        
+        self.stop_btn = ttk.Button(btn_frame, text="停止转码", command=self.stop_transcode, state='disabled')
+        self.stop_btn.pack(side='left', padx=5)
         
         self.upload_btn = ttk.Button(btn_frame, text="3. 上传 TOS", command=self.upload_tos)
         self.upload_btn.pack(side='left', padx=5)
@@ -284,11 +241,10 @@ class IngestHelperApp:
         self.save_btn = ttk.Button(btn_frame, text="4. 保存清单", command=self.save_manifest)
         self.save_btn.pack(side='left', padx=5)
         
-        # 素材列表（带状态列）
+        # 素材列表
         list_frame = ttk.LabelFrame(self.root, text="素材列表", padding=10)
         list_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # 创建 Treeview
         columns = ('filename', 'duration', 'resolution', 'size', 'status')
         self.tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=15)
         
@@ -304,7 +260,6 @@ class IngestHelperApp:
         self.tree.column('size', width=100)
         self.tree.column('status', width=150)
         
-        # 滚动条
         scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         
@@ -326,14 +281,12 @@ class IngestHelperApp:
         ttk.Label(self.root, textvariable=self.status_var, relief='sunken').pack(fill='x', side='bottom')
     
     def update_config_status(self):
-        """更新配置状态显示"""
         if self.config['tos_ak'] and self.config['tos_sk']:
             self.config_status_var.set(f"✅ TOS 配置：{self.config['bucket']} @ {self.config['region']}")
         else:
-            self.config_status_var.set("⚠️ 未配置 TOS 上传凭据（点击'上传配置'设置）")
+            self.config_status_var.set("⚠️ 未配置 TOS 上传凭据")
     
     def show_config_dialog(self):
-        """显示配置对话框"""
         dialog = tk.Toplevel(self.root)
         dialog.title("TOS 上传配置")
         dialog.geometry("500x400")
@@ -341,7 +294,6 @@ class IngestHelperApp:
         dialog.grab_set()
         
         ttk.Label(dialog, text="TOS 上传配置", font=('Arial', 14, 'bold')).pack(pady=10)
-        
         form_frame = ttk.Frame(dialog, padding=20)
         form_frame.pack(fill='both', expand=True)
         
@@ -378,83 +330,77 @@ class IngestHelperApp:
                 self.update_config_status()
                 messagebox.showinfo("成功", "配置已保存")
                 dialog.destroy()
-            else:
-                messagebox.showerror("错误", "保存配置失败")
         
         ttk.Button(dialog, text="保存配置", command=on_save).pack(pady=10)
     
     def browse_source(self):
-        """浏览源目录"""
         directory = filedialog.askdirectory()
         if directory:
             self.source_var.set(directory)
             self.source_dir = directory
     
     def browse_output(self):
-        """浏览输出目录"""
         directory = filedialog.askdirectory()
         if directory:
             self.output_var.set(directory)
             self.output_dir = directory
     
     def log(self, message):
-        """日志输出"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.progress_text.insert('end', f"[{timestamp}] {message}\n")
-        self.progress_text.see('end')
-        self.root.update_idletasks()
+        """日志输出（线程安全）"""
+        def _log():
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.progress_text.insert('end', f"[{timestamp}] {message}\n")
+            self.progress_text.see('end')
+        if threading.current_thread() is threading.main_thread():
+            _log()
+        else:
+            self.root.after(0, _log)
     
     def update_tree_status(self, index, status):
-        """更新列表中某条素材的状态"""
-        if 0 <= index < len(self.proxy_files):
-            item = self.proxy_files[index]
-            item['status'] = status
-            
-            # 更新 Treeview 显示
-            values = (
-                item['filename'],
-                item.get('duration_fmt', ''),
-                item.get('resolution', ''),
-                item.get('size_fmt', ''),
-                status
-            )
-            self.tree.item(index, values=values)
-            self.root.update_idletasks()
+        """更新列表状态（线程安全）"""
+        def _update():
+            if 0 <= index < len(self.proxy_files):
+                item = self.proxy_files[index]
+                item['status'] = status
+                values = (
+                    item['filename'],
+                    item.get('duration_fmt', ''),
+                    item.get('resolution', ''),
+                    item.get('size_fmt', ''),
+                    status
+                )
+                self.tree.item(index, values=values)
+        if threading.current_thread() is threading.main_thread():
+            _update()
+        else:
+            self.root.after(0, _update)
     
     def scan_videos(self):
-        """扫描视频素材（读取元数据）"""
+        """扫描视频素材"""
         if not self.source_dir:
             messagebox.showwarning("警告", "请先选择源目录")
             return
         
         ffmpeg_exe, ffprobe_exe = get_ffmpeg_path()
         if not ffprobe_exe:
-            messagebox.showerror("错误", "未找到 ffprobe，请确保 bin/ffprobe.exe 存在")
+            messagebox.showerror("错误", "未找到 ffprobe")
             return
         
         self.log("=" * 60)
         self.log("开始扫描素材（读取元数据）")
         self.log("=" * 60)
-        self.log(f"源目录：{self.source_dir}")
         
         video_extensions = ('.mp4', '.mov', '.avi', '.mkv', '.flv')
         self.proxy_files = []
+        self.tree_items = {}
         
-        # 清空列表
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        self.status_var.set("正在扫描...")
-        self.root.update_idletasks()
-        
-        # 扫描并读取元数据
         for root, dirs, files in os.walk(self.source_dir):
             for file in files:
                 if file.lower().endswith(video_extensions):
                     full_path = os.path.join(root, file)
-                    
-                    # 读取元数据
-                    self.log(f"读取元数据：{file}")
                     metadata = get_video_metadata(full_path, ffprobe_exe)
                     
                     if metadata:
@@ -462,14 +408,11 @@ class IngestHelperApp:
                         resolution = f"{metadata['width']}x{metadata['height']}"
                         size_fmt = format_file_size(metadata['file_size'])
                         status = "已读取元数据"
-                        
-                        self.log(f"  ✅ {duration_fmt} | {resolution} | {size_fmt}")
                     else:
                         duration_fmt = ""
                         resolution = ""
                         size_fmt = ""
                         status = "无法读取元数据"
-                        self.log(f"  ❌ 无法读取元数据")
                     
                     item = {
                         'source_path': full_path,
@@ -485,21 +428,17 @@ class IngestHelperApp:
                         'metadata': metadata
                     }
                     self.proxy_files.append(item)
-                    
-                    # 添加到列表
-                    self.tree.insert('', 'end', values=(
+                    idx = len(self.proxy_files) - 1
+                    tree_id = self.tree.insert('', 'end', values=(
                         file, duration_fmt, resolution, size_fmt, status
                     ))
+                    self.tree_items[idx] = tree_id
         
-        total = len(self.proxy_files)
-        self.log(f"扫描完成：共 {total} 个视频文件")
-        self.status_var.set(f"已扫描 {total} 个视频")
-        
-        if total == 0:
-            messagebox.showinfo("提示", f"在目录中未找到视频文件")
+        self.log(f"扫描完成：共 {len(self.proxy_files)} 个视频文件")
+        self.status_var.set(f"已扫描 {len(self.proxy_files)} 个视频")
     
-    def batch_transcode(self):
-        """批量转码（后台静默，实时进度）"""
+    def start_batch_transcode(self):
+        """启动批量转码（异步）"""
         if not self.proxy_files:
             messagebox.showwarning("警告", "请先扫描素材")
             return
@@ -513,46 +452,148 @@ class IngestHelperApp:
             messagebox.showerror("错误", "未找到 ffmpeg")
             return
         
+        self.transcode_running = True
+        self.stop_btn.config(state='normal')
+        self.transcode_btn.config(state='disabled')
+        
         self.log("=" * 60)
-        self.log("开始批量转码（后台静默执行）")
+        self.log("开始批量转码（实时进度）")
+        self.log("=" * 60)
+        self.log(f"总文件数：{len(self.proxy_files)}")
+        self.log(f"超时时间：{TRANSCODE_TIMEOUT}秒/文件")
+        self.log(f"心跳间隔：{HEARTBEAT_INTERVAL}秒")
         self.log("=" * 60)
         
+        # 启动异步转码线程
+        self.transcode_thread = threading.Thread(
+            target=self._batch_transcode_worker,
+            args=(ffmpeg_exe,),
+            daemon=True
+        )
+        self.transcode_thread.start()
+        
+        # 启动 UI 刷新循环
+        self._refresh_ui_loop()
+    
+    def _refresh_ui_loop(self):
+        """UI 刷新循环"""
+        if self.transcode_running and self.transcode_thread and self.transcode_thread.is_alive():
+            self.root.after(100, self._refresh_ui_loop)
+    
+    def _batch_transcode_worker(self, ffmpeg_exe):
+        """转码工作线程"""
         total = len(self.proxy_files)
         success_count = 0
         fail_count = 0
         
         for i, item in enumerate(self.proxy_files):
+            if not self.transcode_running:
+                self.log("⚠️ 用户停止转码")
+                break
+            
             filename = item['filename']
             base_name = os.path.splitext(filename)[0]
             proxy_filename = f"{base_name}_720p.mp4"
             proxy_path = os.path.join(self.output_dir, proxy_filename)
             
-            # 更新状态：转码中
+            # 开始转码日志
+            self.log(f"[{i+1}/{total}] 开始转码：{filename}")
             self.update_tree_status(i, "转码中...")
-            self.log(f"[{i+1}/{total}] 正在转码：{filename}")
-            self.root.update_idletasks()
             
-            success, result = transcode_to_proxy(item['source_path'], proxy_path, ffmpeg_exe)
+            start_time = time.time()
+            last_heartbeat = start_time
+            
+            # 执行转码
+            success, result, timed_out = self._transcode_with_timeout(
+                item['source_path'], proxy_path, ffmpeg_exe,
+                start_time, last_heartbeat, filename
+            )
+            
+            elapsed = time.time() - start_time
+            
+            if not self.transcode_running:
+                break
             
             if success:
                 item['proxy_path'] = proxy_path
                 item['proxy_size'] = result
                 success_count += 1
                 size_str = format_file_size(result)
-                self.update_tree_status(i, f"✅ 转码成功 ({size_str})")
-                self.log(f"[{i+1}/{total}] ✅ 转码成功：{size_str}")
+                self.update_tree_status(i, f"✅ 成功 ({size_str})")
+                self.log(f"[{i+1}/{total}] ✅ 转码成功：{size_str} (耗时{elapsed:.1f}秒)")
+            elif timed_out:
+                fail_count += 1
+                self.update_tree_status(i, "❌ 超时")
+                self.log(f"[{i+1}/{total}] ❌ 转码超时（>{TRANSCODE_TIMEOUT}秒）")
             else:
                 fail_count += 1
                 error_msg = str(result)[:100]
-                self.update_tree_status(i, f"❌ 转码失败")
+                self.update_tree_status(i, f"❌ 失败")
                 self.log(f"[{i+1}/{total}] ❌ 转码失败：{error_msg}")
         
         self.log("=" * 60)
-        self.log(f"转码完成：成功 {success_count}/{total}, 失败 {fail_count}")
-        self.status_var.set(f"转码完成：{success_count}/{total}")
+        self.log(f"转码完成：成功 {success_count}/{len(self.proxy_files)}, 失败 {fail_count}")
+        self.status_var.set(f"转码完成：{success_count}/{len(self.proxy_files)}")
         
-        if success_count > 0:
-            messagebox.showinfo("成功", f"转码完成：\n成功 {success_count}/{total}\n失败 {fail_count}")
+        def _finish():
+            self.transcode_running = False
+            self.stop_btn.config(state='disabled')
+            self.transcode_btn.config(state='normal')
+            if success_count > 0:
+                messagebox.showinfo("成功", f"转码完成：\n成功 {success_count}/{len(self.proxy_files)}\n失败 {fail_count}")
+        self.root.after(0, _finish)
+    
+    def _transcode_with_timeout(self, video_path, output_path, ffmpeg_exe, start_time, last_heartbeat_ref, filename):
+        """带超时和心跳的转码"""
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+        
+        cmd = [
+            ffmpeg_exe, '-i', video_path,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
+            '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease',
+            '-c:a', 'aac', '-b:a', '128k', '-y', output_path
+        ]
+        
+        try:
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                startupinfo=startupinfo, creationflags=creationflags
+            )
+            
+            while process.poll() is None:
+                if not self.transcode_running:
+                    process.terminate()
+                    return False, "用户停止", False
+                
+                elapsed = time.time() - start_time
+                if elapsed > TRANSCODE_TIMEOUT:
+                    process.terminate()
+                    return False, "超时", True
+                
+                # 心跳日志
+                now = time.time()
+                if now - last_heartbeat_ref >= HEARTBEAT_INTERVAL:
+                    self.log(f"  ⏳ 仍在转码：{filename} (已耗时{elapsed:.0f}秒)")
+                    last_heartbeat_ref = now
+                
+                time.sleep(1)
+            
+            if process.returncode == 0 and os.path.exists(output_path):
+                output_size = os.path.getsize(output_path)
+                return True, output_size, False
+            else:
+                stderr = process.stderr.read().decode('utf-8', errors='ignore')[:200]
+                return False, stderr, False
+                
+        except Exception as e:
+            return False, str(e), False
+    
+    def stop_transcode(self):
+        """停止转码"""
+        self.transcode_running = False
+        self.log("正在停止转码...")
     
     def upload_tos(self):
         """上传 TOS"""
@@ -561,9 +602,7 @@ class IngestHelperApp:
             return
         
         if not self.config['tos_ak'] or not self.config['tos_sk']:
-            messagebox.showerror("错误", 
-                '未配置本地 TOS 上传凭据！\n\n'
-                '请点击右上角"上传配置"按钮填写。')
+            messagebox.showerror("错误", '未配置本地 TOS 上传凭据！')
             return
         
         if not TOS_AVAILABLE:
@@ -579,9 +618,8 @@ class IngestHelperApp:
             if not item.get('proxy_path') or not os.path.exists(item['proxy_path']):
                 continue
             
-            filename = item['filename']
             self.update_tree_status(i, "上传中...")
-            self.log(f"上传：{filename}")
+            self.log(f"上传：{item['filename']}")
             
             file_hash = hashlib.md5(open(item['proxy_path'], 'rb').read()).hexdigest()[:8]
             tos_key = f"windows_ingest/{datetime.now().strftime('%Y%m%d')}/{file_hash}_{os.path.basename(item['proxy_path'])}"
