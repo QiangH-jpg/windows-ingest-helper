@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Windows Ingest Helper v12
+Windows Ingest Helper v13
 - 本地素材扫描（读取元数据）
-- 720p proxy 转码（异步执行 + 详细硬日志 + 超时机制）
+- 720p proxy 转码（修复 subprocess 管道阻塞问题）
 - 本地 TOS 上传
-- 修复：批量转码无输出文件问题
+- 修复：ffmpeg 子进程生命周期管理 + 管道阻塞
 """
 
 import os
@@ -25,9 +25,10 @@ try:
 except ImportError:
     TOS_AVAILABLE = False
 
-VERSION = "v12"
-BUILD_TIME = "2026-04-13T11:30:00+08:00"
+VERSION = "v13"
+BUILD_TIME = "2026-04-13T14:00:00+08:00"
 TRANSCODE_TIMEOUT = 300  # 单文件超时 5 分钟
+MIN_OUTPUT_SIZE = 10240  # 最小输出文件大小 10KB
 
 CONFIG_FILE = "config.json"
 MANIFEST_FILE = "manifest.json"
@@ -66,7 +67,6 @@ def save_config(config):
 
 
 def get_ffmpeg_path():
-    """获取 ffmpeg 路径"""
     if getattr(sys, 'frozen', False):
         exe_dir = os.path.dirname(sys.executable)
     else:
@@ -82,7 +82,6 @@ def get_ffmpeg_path():
 
 
 def get_video_metadata(video_path, ffprobe_exe):
-    """读取视频元数据"""
     try:
         file_size = os.path.getsize(video_path)
         startupinfo = subprocess.STARTUPINFO()
@@ -289,7 +288,6 @@ class IngestHelperApp:
             self.output_dir = directory
     
     def log(self, message):
-        """日志输出（线程安全）"""
         def _log():
             timestamp = datetime.now().strftime("%H:%M:%S")
             self.progress_text.insert('end', f"[{timestamp}] {message}\n")
@@ -300,7 +298,6 @@ class IngestHelperApp:
             self.root.after(0, _log)
     
     def update_tree_status(self, index, status):
-        """更新列表状态（线程安全）"""
         def _update():
             if 0 <= index < len(self.proxy_files):
                 item = self.proxy_files[index]
@@ -355,7 +352,6 @@ class IngestHelperApp:
         self.status_var.set(f"已扫描 {len(self.proxy_files)} 个视频")
     
     def start_batch_transcode(self):
-        """启动批量转码"""
         if not self.proxy_files:
             messagebox.showwarning("警告", "请先扫描素材")
             return
@@ -369,18 +365,15 @@ class IngestHelperApp:
             messagebox.showerror("错误", "未找到 ffmpeg")
             return
         
-        # 确保输出目录存在
         os.makedirs(self.output_dir, exist_ok=True)
         
         self.transcode_running = True
         self.stop_btn.config(state='normal')
         self.transcode_btn.config(state='disabled')
         
-        # 启动异步转码线程
         self.transcode_thread = threading.Thread(target=self._batch_transcode_worker, args=(ffmpeg_exe,), daemon=True)
         self.transcode_thread.start()
         
-        # 启动 UI 刷新循环
         self._refresh_ui_loop()
     
     def _refresh_ui_loop(self):
@@ -388,7 +381,6 @@ class IngestHelperApp:
             self.root.after(100, self._refresh_ui_loop)
     
     def _batch_transcode_worker(self, ffmpeg_exe):
-        """转码工作线程（带详细硬日志）"""
         try:
             total = len(self.proxy_files)
             success_count = 0
@@ -456,7 +448,7 @@ class IngestHelperApp:
             self.root.after(0, _finish)
     
     def _transcode_single(self, video_path, output_path, ffmpeg_exe, filename, start_time):
-        """转码单个文件（带超时）"""
+        """转码单个文件（修复管道阻塞问题）"""
         try:
             # 构建 ffmpeg 命令
             cmd = [
@@ -473,43 +465,44 @@ class IngestHelperApp:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creationflags = subprocess.CREATE_NO_WINDOW
             
-            # 启动 subprocess
+            # 【关键修复】不捕获 stdout，只捕获 stderr
+            # 原因：捕获 stdout 会导致管道缓冲区满，ffmpeg 阻塞
             process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                startupinfo=startupinfo, creationflags=creationflags
+                cmd,
+                stdout=subprocess.DEVNULL,  # 不捕获 stdout
+                stderr=subprocess.PIPE,     # 只捕获 stderr 用于错误诊断
+                startupinfo=startupinfo,
+                creationflags=creationflags
             )
+            
             self.log(f"  [subprocess] 已启动 (PID: {process.pid})")
             
-            # 等待完成，带超时
-            last_heartbeat = start_time
-            while process.poll() is None:
-                if not self.transcode_running:
-                    process.terminate()
-                    return False, "用户停止"
-                
-                elapsed = time.time() - start_time
-                if elapsed > TRANSCODE_TIMEOUT:
-                    process.terminate()
-                    return False, f"超时 ({elapsed:.0f}秒 > {TRANSCODE_TIMEOUT}秒)"
-                
-                # 心跳日志
-                now = time.time()
-                if now - last_heartbeat >= 30:
-                    self.log(f"  ⏳ 仍在转码：{filename} (已耗时{elapsed:.0f}秒)")
-                    last_heartbeat = now
-                
-                time.sleep(1)
+            # 使用 communicate 等待完成，带超时
+            # 【关键修复】communicate 会自动处理管道，避免阻塞
+            try:
+                _, stderr_data = process.communicate(timeout=TRANSCODE_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                process.wait(timeout=5)
+                return False, f"超时 ({TRANSCODE_TIMEOUT}秒)"
             
             # 检查结果
             if process.returncode == 0 and os.path.exists(output_path):
                 output_size = os.path.getsize(output_path)
+                
+                # 检查文件大小是否合理
+                if output_size < MIN_OUTPUT_SIZE:
+                    self.log(f"  [输出检测] 文件过小 ({output_size} 字节 < {MIN_OUTPUT_SIZE} 字节)")
+                    return False, f"输出文件过小 ({output_size} 字节)"
+                
                 self.log(f"  [输出检测] 文件已生成 ({format_file_size(output_size)})")
                 return True, output_size
             else:
-                stderr = process.stderr.read().decode('utf-8', errors='ignore')[:200]
+                stderr_str = stderr_data.decode('utf-8', errors='ignore')[:500] if stderr_data else "无错误输出"
                 self.log(f"  [输出检测] 文件未生成")
-                self.log(f"  [ffmpeg 错误] {stderr}")
-                return False, stderr or f"返回码：{process.returncode}"
+                self.log(f"  [ffmpeg 返回码] {process.returncode}")
+                self.log(f"  [ffmpeg stderr] {stderr_str}")
+                return False, stderr_str or f"返回码：{process.returncode}"
                 
         except FileNotFoundError as e:
             return False, f"ffmpeg 未找到：{e}"
