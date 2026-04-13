@@ -1,0 +1,44 @@
+name: Build Windows EXE v11
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install pyinstaller tos
+      - name: Download ffmpeg
+        run: |
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_extracted
+          $d = Get-ChildItem ffmpeg_extracted -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path Windows_Release\bin
+          Copy-Item "$($d.FullName)\bin\ffmpeg.exe" Windows_Release\bin\
+          Copy-Item "$($d.FullName)\bin\ffprobe.exe" Windows_Release\bin\
+          Remove-Item ffmpeg.zip, ffmpeg_extracted -Recurse -Force
+      - name: Build EXE
+        run: pyinstaller --onefile --windowed --name ingest_helper_v11 windows_ingest_helper/main.py
+      - name: Copy exe
+        run: Copy-Item dist\ingest_helper_v11.exe Windows_Release\
+      - name: Create ZIP
+        run: Compress-Archive -Path Windows_Release\* -DestinationPath Windows_Ingest_Helper_v11.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-v11
+          path: Windows_Ingest_Helper_v11.zip
+      - name: Upload TOS
+        if: ${{ env.TOS_AK != '' }}
+        run: |
+          $env:TOS_KEY="Windows_Executable/Windows_Ingest_Helper_v11.zip"
+          python .github/upload_tos_v11.py
+        env:
+          TOS_AK: ${{ secrets.TOS_AK }}
+          TOS_SK: ${{ secrets.TOS_SK }}
