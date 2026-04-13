@@ -1,557 +1,442 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Windows 上传/预处理助手 v1.0
-主入口 - GUI 版本
+Windows Ingest Helper v9
+- 本地素材扫描
+- 720p proxy 转码
+- 本地 TOS 上传（支持配置文件）
+"""
 
-运行方式：
-    Windows: 双击 main.py 或 main.exe
-    命令行：python main.py
-"""
 import os
 import sys
 import json
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
-from datetime import datetime
-import threading
+from tkinter import ttk, filedialog, messagebox
 import subprocess
 import hashlib
-from pathlib import Path
+from datetime import datetime
 
-# 配置
-PROXY_WIDTH = 1280
-PROXY_HEIGHT = 720
-PROXY_FPS = 25
+# TOS SDK
+try:
+    from tos import TosClientV2
+    TOS_AVAILABLE = True
+except ImportError:
+    TOS_AVAILABLE = False
 
-# 调试标志
-DEBUG_MODE = True
+VERSION = "v9"
+BUILD_TIME = "2026-04-13T09:30:00+08:00"
 
-def get_media_tools_path():
-    """
-    获取 ffmpeg/ffprobe 的路径
-    
-    优先级：
-    1. PyInstaller 打包后的 bin 目录（sys._MEIPASS/bin）
-    2. 当前 exe 所在目录的 bin 目录
-    3. 系统 PATH 中的 ffmpeg/ffprobe（回退）
-    """
-    ffmpeg_path = "ffmpeg"  # 默认回退
-    ffprobe_path = "ffprobe"  # 默认回退
-    
-    # 1. 检查 PyInstaller 打包后的临时目录
+CONFIG_FILE = "config.json"
+MANIFEST_FILE = "manifest.json"
+
+DEFAULT_CONFIG = {
+    "tos_ak": "",
+    "tos_sk": "",
+    "bucket": "e23-video",
+    "region": "cn-beijing",
+    "endpoint": "tos-cn-beijing.volces.com"
+}
+
+
+def load_config():
+    """加载本地配置文件"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                # 合并默认值
+                for key, value in DEFAULT_CONFIG.items():
+                    if key not in config:
+                        config[key] = value
+                return config
+        except Exception as e:
+            print(f"读取配置文件失败：{e}")
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(config):
+    """保存配置文件"""
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"保存配置文件失败：{e}")
+        return False
+
+
+def get_ffmpeg_path():
+    """获取 ffmpeg 路径"""
     if getattr(sys, 'frozen', False):
-        # PyInstaller 打包的应用
-        if hasattr(sys, '_MEIPASS'):
-            # PyInstaller 临时目录
-            bin_dir = os.path.join(sys._MEIPASS, 'bin')
-            if os.path.exists(bin_dir):
-                ffmpeg_candidate = os.path.join(bin_dir, 'ffmpeg.exe')
-                ffprobe_candidate = os.path.join(bin_dir, 'ffprobe.exe')
-                if os.path.exists(ffmpeg_candidate):
-                    ffmpeg_path = ffmpeg_candidate
-                if os.path.exists(ffprobe_candidate):
-                    ffprobe_path = ffprobe_candidate
-        
-        # 2. 检查 exe 所在目录的 bin 目录
-        exe_dir = os.path.dirname(sys.executable)
-        bin_dir = os.path.join(exe_dir, 'bin')
-        if os.path.exists(bin_dir):
-            ffmpeg_candidate = os.path.join(bin_dir, 'ffmpeg.exe')
-            ffprobe_candidate = os.path.join(bin_dir, 'ffprobe.exe')
-            if os.path.exists(ffmpeg_candidate):
-                ffmpeg_path = ffmpeg_candidate
-            if os.path.exists(ffprobe_candidate):
-                ffprobe_path = ffprobe_candidate
+        # 打包后环境
+        base_path = sys._MEIPASS
+        bin_path = os.path.join(base_path, 'bin')
+        ffmpeg_exe = os.path.join(bin_path, 'ffmpeg.exe')
+        ffprobe_exe = os.path.join(bin_path, 'ffprobe.exe')
+        if os.path.exists(ffmpeg_exe) and os.path.exists(ffprobe_exe):
+            return ffmpeg_exe, ffprobe_exe
+    # 开发环境
+    bin_path = os.path.join(os.path.dirname(__file__), 'bin')
+    ffmpeg_exe = os.path.join(bin_path, 'ffmpeg.exe')
+    ffprobe_exe = os.path.join(bin_path, 'ffprobe.exe')
+    if os.path.exists(ffmpeg_exe) and os.path.exists(ffprobe_exe):
+        return ffmpeg_exe, ffprobe_exe
+    return None, None
+
+
+def get_video_info(video_path, ffprobe_exe):
+    """获取视频信息"""
+    cmd = [
+        ffprobe_exe, '-v', 'quiet', '-print_format', 'json',
+        '-show_streams', '-show_format', video_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return json.loads(result.stdout)
+
+
+def transcode_to_proxy(video_path, output_path, ffmpeg_exe):
+    """转码为 720p proxy"""
+    cmd = [
+        ffmpeg_exe, '-i', video_path,
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '28',
+        '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-y',
+        output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def upload_to_tos(file_path, tos_key, config):
+    """上传文件到 TOS"""
+    if not TOS_AVAILABLE:
+        return False, "TOS SDK 未安装"
     
-    return ffmpeg_path, ffprobe_path
+    try:
+        endpoint = f"https://{config['endpoint']}"
+        client = TosClientV2(
+            ak=config['tos_ak'],
+            sk=config['tos_sk'],
+            endpoint=endpoint,
+            region=config['region']
+        )
+        client.put_object_from_file(
+            bucket=config['bucket'],
+            key=tos_key,
+            file_path=file_path
+        )
+        tos_url = f"https://{config['bucket']}.{config['endpoint']}/{tos_key}"
+        return True, tos_url
+    except Exception as e:
+        return False, str(e)
 
-# 初始化媒体工具路径
-FFMPEG, FFPROBE = get_media_tools_path()
 
-class IngestHelperGUI:
+class IngestHelperApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Windows 上传/预处理助手 v1.0")
+        self.root.title(f"Windows 上传/预处理助手 {VERSION}")
         self.root.geometry("900x700")
         
-        # 状态变量
-        self.input_dir = tk.StringVar()
-        self.output_dir = tk.StringVar(value="./output")
-        self.is_processing = False
-        self.video_files = []
-        self.processed_count = 0
-        self.bad_count = 0
-        self.uploaded_count = 0
+        self.config = load_config()
+        self.source_dir = ""
+        self.output_dir = ""
+        self.proxy_files = []
+        self.manifest = {"files": [], "created_at": "", "version": VERSION}
         
-        self.setup_ui()
+        self.create_widgets()
     
-    def setup_ui(self):
-        """设置界面"""
-        # 顶部：目录选择
-        top_frame = ttk.LabelFrame(self.root, text="1. 选择目录", padding=10)
-        top_frame.pack(fill="x", padx=10, pady=5)
+    def create_widgets(self):
+        # 标题
+        title_frame = ttk.Frame(self.root)
+        title_frame.pack(fill='x', padx=10, pady=10)
+        ttk.Label(title_frame, text=f"Windows 上传/预处理助手 {VERSION}", 
+                  font=('Arial', 16, 'bold')).pack(side='left')
+        ttk.Label(title_frame, text=f"Build: {BUILD_TIME}", 
+                  font=('Arial', 8)).pack(side='left', padx=10)
         
-        ttk.Label(top_frame, text="素材目录:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(top_frame, textvariable=self.input_dir, width=60).grid(row=0, column=1, padx=5)
-        ttk.Button(top_frame, text="浏览...", command=self.browse_input).grid(row=0, column=2)
+        # 配置按钮
+        ttk.Button(title_frame, text="上传配置", 
+                   command=self.show_config_dialog).pack(side='right')
         
-        ttk.Label(top_frame, text="输出目录:").grid(row=1, column=0, sticky="w", pady=5)
-        ttk.Entry(top_frame, textvariable=self.output_dir, width=60).grid(row=1, column=1, padx=5)
-        ttk.Button(top_frame, text="浏览...", command=self.browse_output).grid(row=1, column=2)
+        # 配置状态
+        self.config_status_var = tk.StringVar()
+        self.update_config_status()
+        ttk.Label(self.root, textvariable=self.config_status_var, 
+                  foreground='red').pack(anchor='ne', padx=10)
         
-        # 中部：视频列表
-        list_frame = ttk.LabelFrame(self.root, text="2. 视频列表", padding=10)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        # 源目录
+        dir_frame = ttk.LabelFrame(self.root, text="源目录", padding=10)
+        dir_frame.pack(fill='x', padx=10, pady=5)
         
-        # 创建树形列表
-        columns = ("filename", "duration", "resolution", "size", "status")
-        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=15)
-        self.tree.heading("filename", text="文件名")
-        self.tree.heading("duration", text="时长")
-        self.tree.heading("resolution", text="分辨率")
-        self.tree.heading("size", text="大小")
-        self.tree.heading("status", text="状态")
-        self.tree.column("filename", width=300)
-        self.tree.column("duration", width=80)
-        self.tree.column("resolution", width=100)
-        self.tree.column("size", width=80)
-        self.tree.column("status", width=150)
+        self.source_var = tk.StringVar()
+        ttk.Entry(dir_frame, textvariable=self.source_var, width=60).pack(side='left')
+        ttk.Button(dir_frame, text="浏览", command=self.browse_source).pack(side='left', padx=5)
         
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # 输出目录
+        out_frame = ttk.LabelFrame(self.root, text="输出目录", padding=10)
+        out_frame.pack(fill='x', padx=10, pady=5)
         
-        # 底部：操作按钮和日志
-        bottom_frame = ttk.Frame(self.root, padding=10)
-        bottom_frame.pack(fill="x", padx=10, pady=5)
+        self.output_var = tk.StringVar()
+        ttk.Entry(out_frame, textvariable=self.output_var, width=60).pack(side='left')
+        ttk.Button(out_frame, text="浏览", command=self.browse_output).pack(side='left', padx=5)
         
-        self.scan_btn = ttk.Button(bottom_frame, text="扫描素材", command=self.scan_videos)
-        self.scan_btn.pack(side="left", padx=5)
+        # 操作按钮
+        btn_frame = ttk.Frame(self.root)
+        btn_frame.pack(fill='x', padx=10, pady=10)
         
-        self.transcode_btn = ttk.Button(bottom_frame, text="转码 Proxy", command=self.transcode_all, state="disabled")
-        self.transcode_btn.pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="扫描素材", command=self.scan_videos).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="批量转码", command=self.batch_transcode).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="上传 TOS", command=self.upload_tos).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="保存清单", command=self.save_manifest).pack(side='left', padx=5)
         
-        self.upload_btn = ttk.Button(bottom_frame, text="上传 TOS", command=self.upload_all, state="disabled")
-        self.upload_btn.pack(side="left", padx=5)
+        # 进度
+        progress_frame = ttk.LabelFrame(self.root, text="进度", padding=10)
+        progress_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
-        self.progress_var = tk.DoubleVar()
-        self.progress = ttk.Progressbar(bottom_frame, variable=self.progress_var, maximum=100)
-        self.progress.pack(side="top", fill="x", pady=5)
-        
-        # 日志区域
-        log_frame = ttk.LabelFrame(self.root, text="3. 处理日志", padding=10)
-        log_frame.pack(fill="x", padx=10, pady=5)
-        
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, wrap="word")
-        self.log_text.pack(fill="x")
+        self.progress_text = tk.Text(progress_frame, height=20, wrap='word')
+        self.progress_text.pack(fill='both', expand=True)
+        scrollbar = ttk.Scrollbar(self.progress_text, command=self.progress_text.yview)
+        scrollbar.pack(side='right', fill='y')
+        self.progress_text.config(yscrollcommand=scrollbar.set)
         
         # 状态栏
         self.status_var = tk.StringVar(value="就绪")
-        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief="sunken")
-        status_bar.pack(fill="x", padx=10, pady=5)
+        ttk.Label(self.root, textvariable=self.status_var, relief='sunken').pack(fill='x', side='bottom')
     
-    def log(self, message):
-        """添加日志"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert("end", f"[{timestamp}] {message}\n")
-        self.log_text.see("end")
-        self.root.update_idletasks()
+    def update_config_status(self):
+        """更新配置状态显示"""
+        if self.config['tos_ak'] and self.config['tos_sk']:
+            self.config_status_var.set(f"✅ TOS 配置：{self.config['bucket']}")
+            self.config_status_var.set(f"✅ TOS 配置：{self.config['bucket']} @ {self.config['region']}")
+        else:
+            self.config_status_var.set("⚠️ 未配置 TOS 上传凭据（点击"上传配置"设置）")
     
-    def browse_input(self):
-        """浏览输入目录"""
-        directory = filedialog.askdirectory(title="选择素材目录")
+    def show_config_dialog(self):
+        """显示配置对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("TOS 上传配置")
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        ttk.Label(dialog, text="TOS 上传配置", font=('Arial', 14, 'bold')).pack(pady=10)
+        
+        form_frame = ttk.Frame(dialog, padding=20)
+        form_frame.pack(fill='both', expand=True)
+        
+        # AK
+        ttk.Label(form_frame, text="Access Key (AK):").grid(row=0, column=0, sticky='w', pady=5)
+        ak_var = tk.StringVar(value=self.config.get('tos_ak', ''))
+        ak_entry = ttk.Entry(form_frame, textvariable=ak_var, width=50)
+        ak_entry.grid(row=0, column=1, pady=5)
+        
+        # SK
+        ttk.Label(form_frame, text="Secret Key (SK):").grid(row=1, column=0, sticky='w', pady=5)
+        sk_var = tk.StringVar(value=self.config.get('tos_sk', ''))
+        sk_entry = ttk.Entry(form_frame, textvariable=sk_var, width=50, show='*')
+        sk_entry.grid(row=1, column=1, pady=5)
+        
+        # Bucket
+        ttk.Label(form_frame, text="Bucket:").grid(row=2, column=0, sticky='w', pady=5)
+        bucket_var = tk.StringVar(value=self.config.get('bucket', 'e23-video'))
+        ttk.Entry(form_frame, textvariable=bucket_var, width=50).grid(row=2, column=1, pady=5)
+        
+        # Region
+        ttk.Label(form_frame, text="Region:").grid(row=3, column=0, sticky='w', pady=5)
+        region_var = tk.StringVar(value=self.config.get('region', 'cn-beijing'))
+        ttk.Entry(form_frame, textvariable=region_var, width=50).grid(row=3, column=1, pady=5)
+        
+        # Endpoint
+        ttk.Label(form_frame, text="Endpoint:").grid(row=4, column=0, sticky='w', pady=5)
+        endpoint_var = tk.StringVar(value=self.config.get('endpoint', 'tos-cn-beijing.volces.com'))
+        ttk.Entry(form_frame, textvariable=endpoint_var, width=50).grid(row=4, column=1, pady=5)
+        
+        def on_save():
+            new_config = {
+                'tos_ak': ak_var.get(),
+                'tos_sk': sk_var.get(),
+                'bucket': bucket_var.get(),
+                'region': region_var.get(),
+                'endpoint': endpoint_var.get()
+            }
+            if save_config(new_config):
+                self.config = new_config
+                self.update_config_status()
+                messagebox.showinfo("成功", "配置已保存")
+                dialog.destroy()
+            else:
+                messagebox.showerror("错误", "保存配置失败")
+        
+        ttk.Button(dialog, text="保存配置", command=on_save).pack(pady=10)
+    
+    def browse_source(self):
+        """浏览源目录"""
+        directory = filedialog.askdirectory()
         if directory:
-            self.input_dir.set(directory)
-            self.log(f"选择素材目录：{directory}")
+            self.source_var.set(directory)
+            self.source_dir = directory
     
     def browse_output(self):
         """浏览输出目录"""
-        directory = filedialog.askdirectory(title="选择输出目录")
+        directory = filedialog.askdirectory()
         if directory:
-            self.output_dir.set(directory)
-            self.log(f"选择输出目录：{directory}")
+            self.output_var.set(directory)
+            self.output_dir = directory
+    
+    def log(self, message):
+        """日志输出"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.progress_text.insert('end', f"[{timestamp}] {message}\n")
+        self.progress_text.see('end')
+        self.root.update_idletasks()
     
     def scan_videos(self):
-        """扫描视频文件"""
-        input_dir = self.input_dir.get()
-        
-        # 调试输出
-        self.log("=" * 60)
-        self.log("【调试】扫描参数")
-        self.log(f"  selected_dir={input_dir}")
-        self.log(f"  normalized_dir={os.path.normpath(input_dir) if input_dir else 'N/A'}")
-        self.log(f"  dir_exists={os.path.exists(input_dir) if input_dir else False}")
-        self.log(f"  dir_readable={os.access(input_dir, os.R_OK) if input_dir and os.path.exists(input_dir) else False}")
-        
-        if not input_dir or not os.path.exists(input_dir):
-            self.log("【错误】目录不存在或不可读")
-            messagebox.showerror("错误", f"请先选择有效的素材目录\n\n选择的目录：{input_dir}\n目录存在：{os.path.exists(input_dir) if input_dir else False}")
+        """扫描视频素材"""
+        if not self.source_dir:
+            messagebox.showwarning("警告", "请先选择源目录")
             return
         
-        self.log(f"\n开始扫描：{input_dir}")
-        self.status_var.set("正在扫描...")
+        self.log(f"扫描目录：{self.source_dir}")
+        video_extensions = ('.mp4', '.mov', '.avi', '.mkv', '.flv')
+        self.proxy_files = []
         
-        # 清空列表
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        self.video_files = []
-        
-        # 扫描视频文件
-        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.m4v'}
-        self.log("\n【调试】扫描结果")
-        for root, dirs, files in os.walk(input_dir):
+        for root, dirs, files in os.walk(self.source_dir):
             for file in files:
-                if Path(file).suffix.lower() in video_extensions:
-                    file_path = os.path.join(root, file)
-                    self.video_files.append(file_path)
-                    self.log(f"  找到：{file_path}")
+                if file.lower().endswith(video_extensions):
+                    full_path = os.path.join(root, file)
+                    self.proxy_files.append({
+                        'source_path': full_path,
+                        'filename': file,
+                        'proxy_path': '',
+                        'tos_key': '',
+                        'tos_url': '',
+                        'upload_status': 'pending'
+                    })
+                    self.log(f"  找到：{file}")
         
-        self.log(f"\n找到 {len(self.video_files)} 个视频文件")
-        
-        # 获取每个视频信息
-        for i, file_path in enumerate(self.video_files):
-            info = self.get_video_info(file_path)
-            if info:
-                size_mb = info['size'] / 1024 / 1024
-                self.tree.insert("", "end", values=(
-                    os.path.basename(file_path),
-                    f"{info['duration']:.1f}s",
-                    f"{info['width']}x{info['height']}",
-                    f"{size_mb:.1f}MB",
-                    "待处理"
-                ))
-            else:
-                self.tree.insert("", "end", values=(
-                    os.path.basename(file_path),
-                    "-",
-                    "-",
-                    "-",
-                    "❌ 无法读取"
-                ))
-        
-        self.status_var.set(f"扫描完成：{len(self.video_files)} 个文件")
-        self.transcode_btn.config(state="normal" if self.video_files else "disabled")
-        self.log("扫描完成")
+        self.log(f"共找到 {len(self.proxy_files)} 个视频文件")
+        self.status_var.set(f"已扫描 {len(self.proxy_files)} 个视频")
     
-    def get_video_info(self, video_path):
-        """获取视频元数据（带兼容性回退）"""
-        # 调试输出
-        self.log(f"\n【调试】获取元数据")
-        self.log(f"  文件路径：{video_path}")
-        self.log(f"  文件存在：{os.path.exists(video_path)}")
-        self.log(f"  ffprobe 命令：{FFPROBE}")
-        
-        # 主尝试：标准参数
-        cmd = [
-            FFPROBE, '-v', 'error',
-            '-show_entries', 'stream=width,height,duration,r_frame_rate,codec_name',
-            '-show_entries', 'format=filename,size',
-            '-print_format', 'json',
-            video_path
-        ]
-        self.log(f"  完整命令：{' '.join(cmd)}")
-        
-        try:
-            result = self._run_ffprobe(cmd)
-            if result:
-                return result
-            
-            # 回退尝试 1：更宽松的参数
-            self.log(f"\n【回退尝试 1】使用更宽松参数")
-            cmd_fallback1 = [
-                FFPROBE, '-v', 'warning',
-                '-show_format', '-show_streams',
-                '-print_format', 'json',
-                video_path
-            ]
-            self.log(f"  完整命令：{' '.join(cmd_fallback1)}")
-            
-            result = self._run_ffprobe(cmd_fallback1)
-            if result:
-                self.log(f"  ✅ 回退尝试 1 成功")
-                return result
-            
-            # 回退尝试 2：只读取基本信息
-            self.log(f"\n【回退尝试 2】只读取基本信息")
-            cmd_fallback2 = [
-                FFPROBE, '-v', 'warning',
-                '-show_entries', 'format=duration,size',
-                '-show_entries', 'stream=width,height,codec_name',
-                '-print_format', 'json',
-                video_path
-            ]
-            self.log(f"  完整命令：{' '.join(cmd_fallback2)}")
-            
-            result = self._run_ffprobe(cmd_fallback2)
-            if result:
-                self.log(f"  ✅ 回退尝试 2 成功")
-                return result
-            
-            # 所有尝试都失败
-            self.log(f"\n  ❌ 所有 ffprobe 尝试都失败")
-            self.log(f"  兼容性警告：该文件可能是特殊格式或已损坏")
-            return None
-            
-        except Exception as e:
-            self.log(f"  ❌ 异常：{type(e).__name__}: {e}")
-            import traceback
-            self.log(f"  堆栈：{traceback.format_exc()}")
-            return None
-    
-    def _run_ffprobe(self, cmd):
-        """执行 ffprobe 并解析结果"""
-        try:
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            )
-            
-            # 调试输出
-            self.log(f"  返回码：{result.returncode}")
-            self.log(f"  stdout 长度：{len(result.stdout) if result.stdout else 0}")
-            self.log(f"  stderr 长度：{len(result.stderr) if result.stderr else 0}")
-            
-            if result.stderr:
-                self.log(f"  stderr 前 500 字符：{result.stderr[:500]}")
-            
-            # 检查 stdout 是否为空
-            if not result.stdout or not result.stdout.strip():
-                self.log(f"  ❌ stdout 为空")
-                return None
-            
-            # 解析 JSON
-            try:
-                data = json.loads(result.stdout)
-            except json.JSONDecodeError as je:
-                self.log(f"  ❌ JSON 解析失败：{je}")
-                return None
-            
-            # 提取数据
-            stream = data.get('streams', [{}])[0] if data.get('streams') else {}
-            fmt = data.get('format', {})
-            
-            # 检查必要字段
-            if not stream and not fmt:
-                self.log(f"  ❌ JSON 结构异常：缺少 streams 和 format")
-                return None
-            
-            info = {
-                'width': stream.get('width', 0),
-                'height': stream.get('height', 0),
-                'duration': float(stream.get('duration', 0) or fmt.get('duration', 0)),
-                'fps': stream.get('r_frame_rate', '0/1'),
-                'codec': stream.get('codec_name', 'unknown'),
-                'size': int(fmt.get('size', 0)),
-            }
-            
-            self.log(f"  ✅ 元数据：{info['width']}x{info['height']} {info['duration']:.1f}s {info['size']/1024/1024:.1f}MB")
-            return info
-            
-        except Exception as e:
-            self.log(f"  ❌ _run_ffprobe 异常：{type(e).__name__}: {e}")
-            return None
-    
-    def transcode_all(self):
-        """转码所有视频"""
-        if not self.video_files:
+    def batch_transcode(self):
+        """批量转码"""
+        if not self.proxy_files:
+            messagebox.showwarning("警告", "请先扫描素材")
             return
         
-        self.is_processing = True
-        self.transcode_btn.config(state="disabled")
-        self.scan_btn.config(state="disabled")
+        if not self.output_dir:
+            messagebox.showwarning("警告", "请先选择输出目录")
+            return
         
-        # 创建输出目录
-        output_dir = self.output_dir.get()
-        proxy_dir = os.path.join(output_dir, 'proxy')
-        logs_dir = os.path.join(output_dir, 'logs')
-        os.makedirs(proxy_dir, exist_ok=True)
-        os.makedirs(logs_dir, exist_ok=True)
+        ffmpeg_exe, ffprobe_exe = get_ffmpeg_path()
+        if not ffmpeg_exe:
+            messagebox.showerror("错误", "未找到 ffmpeg，请确保 bin/ffmpeg.exe 存在")
+            return
         
-        # 初始化 manifest
-        manifest = {
-            'version': '1.0',
-            'created_at': datetime.now().isoformat(),
-            'input_directory': self.input_dir.get(),
-            'total_files': len(self.video_files),
-            'processed_files': [],
-            'bad_files': [],
-            'duplicates': []
+        self.log("开始批量转码...")
+        success_count = 0
+        
+        for i, item in enumerate(self.proxy_files):
+            filename = os.path.splitext(item['filename'])[0]
+            proxy_filename = f"{filename}_720p.mp4"
+            proxy_path = os.path.join(self.output_dir, proxy_filename)
+            
+            self.log(f"[{i+1}/{len(self.proxy_files)}] 转码：{item['filename']}")
+            
+            if transcode_to_proxy(item['source_path'], proxy_path, ffmpeg_exe):
+                item['proxy_path'] = proxy_path
+                success_count += 1
+                self.log(f"  ✅ 成功：{proxy_filename}")
+            else:
+                self.log(f"  ❌ 失败：{item['filename']}")
+        
+        self.log(f"转码完成：{success_count}/{len(self.proxy_files)} 成功")
+        self.status_var.set(f"转码完成：{success_count}/{len(self.proxy_files)}")
+    
+    def upload_tos(self):
+        """上传 TOS"""
+        if not self.proxy_files:
+            messagebox.showwarning("警告", "请先扫描并转码素材")
+            return
+        
+        # 检查配置
+        if not self.config['tos_ak'] or not self.config['tos_sk']:
+            messagebox.showerror("错误", 
+                "未配置本地 TOS 上传凭据！\n\n"
+                "请点击右上角"上传配置"按钮，填写：\n"
+                "- TOS Access Key (AK)\n"
+                "- TOS Secret Key (SK)\n"
+                "- Bucket\n"
+                "- Region\n"
+                "- Endpoint")
+            return
+        
+        if not TOS_AVAILABLE:
+            messagebox.showerror("错误", "TOS SDK 未安装，请运行：pip install tos")
+            return
+        
+        self.log("开始上传 TOS...")
+        upload_count = 0
+        
+        for i, item in enumerate(self.proxy_files):
+            if not item['proxy_path'] or not os.path.exists(item['proxy_path']):
+                self.log(f"[{i+1}/{len(self.proxy_files)}] 跳过（无 proxy 文件）：{item['filename']}")
+                continue
+            
+            # 生成 TOS key
+            file_hash = hashlib.md5(open(item['proxy_path'], 'rb').read()).hexdigest()[:8]
+            tos_key = f"windows_ingest/{datetime.now().strftime('%Y%m%d')}/{file_hash}_{os.path.basename(item['proxy_path'])}"
+            
+            self.log(f"[{i+1}/{len(self.proxy_files)}] 上传：{os.path.basename(item['proxy_path'])}")
+            
+            success, result = upload_to_tos(item['proxy_path'], tos_key, self.config)
+            
+            if success:
+                item['tos_key'] = tos_key
+                item['tos_url'] = result
+                item['upload_status'] = 'completed'
+                upload_count += 1
+                self.log(f"  ✅ 成功：{result}")
+            else:
+                item['upload_status'] = f'failed: {result}'
+                self.log(f"  ❌ 失败：{result}")
+        
+        self.log(f"上传完成：{upload_count}/{len(self.proxy_files)} 成功")
+        self.status_var.set(f"TOS 上传完成：{upload_count} 个文件")
+        
+        if upload_count > 0:
+            messagebox.showinfo("成功", f"成功上传 {upload_count} 个文件到 TOS")
+    
+    def save_manifest(self):
+        """保存清单"""
+        if not self.output_dir:
+            messagebox.showwarning("警告", "请先选择输出目录")
+            return
+        
+        self.manifest['files'] = self.proxy_files
+        self.manifest['created_at'] = datetime.now().isoformat()
+        self.manifest['config'] = {
+            'bucket': self.config['bucket'],
+            'region': self.config['region']
         }
         
-        # 转码线程
-        def run_transcode():
-            self.processed_count = 0
-            self.bad_count = 0
-            
-            for i, video_path in enumerate(self.video_files):
-                progress = int((i + 1) / len(self.video_files) * 100)
-                self.progress_var.set(progress)
-                self.status_var.set(f"处理中：{i+1}/{len(self.video_files)}")
-                
-                filename = os.path.basename(video_path)
-                self.log(f"[{i+1}/{len(self.video_files)}] {filename}")
-                
-                # 获取元数据
-                info = self.get_video_info(video_path)
-                if not info:
-                    self.log(f"  ❌ 无法读取元数据")
-                    manifest['bad_files'].append({
-                        'original_path': video_path,
-                        'reason': '无法读取元数据',
-                        'status': 'bad'
-                    })
-                    self.bad_count += 1
-                    self.update_item_status(i, "❌ 无法读取")
-                    continue
-                
-                # 检测坏片
-                is_bad, reasons = self.is_bad_video(info)
-                if is_bad:
-                    self.log(f"  ⚠️ 坏片：{', '.join(reasons)}")
-                    manifest['bad_files'].append({
-                        'original_path': video_path,
-                        'original_info': info,
-                        'reasons': reasons,
-                        'status': 'bad'
-                    })
-                    self.bad_count += 1
-                    self.update_item_status(i, f"❌ 坏片：{reasons[0]}")
-                    continue
-                
-                # 转码 proxy
-                proxy_filename = f"proxy_{i:04d}_{Path(video_path).stem}.mp4"
-                proxy_path = os.path.join(proxy_dir, proxy_filename)
-                
-                self.log(f"  转码 720p proxy...")
-                if self.transcode_to_proxy(video_path, proxy_path):
-                    proxy_size = os.path.getsize(proxy_path)
-                    self.log(f"  ✅ 转码成功 {proxy_size/1024/1024:.1f}MB")
-                    
-                    # 计算哈希
-                    file_hash = self.compute_file_hash(video_path)
-                    
-                    # 添加到 manifest
-                    manifest['processed_files'].append({
-                        'index': i,
-                        'original_path': video_path,
-                        'original_filename': filename,
-                        'original_info': info,
-                        'file_hash': file_hash,
-                        'proxy_path': proxy_path,
-                        'proxy_filename': proxy_filename,
-                        'proxy_size': proxy_size,
-                        'tos_key': None,
-                        'tos_url': None,
-                        'upload_status': 'pending',
-                        'preprocess_notes': []
-                    })
-                    self.update_item_status(i, "✅ 转码完成")
-                    self.processed_count += 1
-                else:
-                    self.log(f"  ❌ 转码失败")
-                    self.update_item_status(i, "❌ 转码失败")
-            
-            # 保存 manifest
-            manifest_path = os.path.join(output_dir, 'manifest.json')
-            with open(manifest_path, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, ensure_ascii=False, indent=2)
-            
-            # 保存日志
-            log_path = os.path.join(logs_dir, f'ingest_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
-            with open(log_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'input_directory': self.input_dir.get(),
-                    'output_directory': output_dir,
-                    'total_files': len(self.video_files),
-                    'processed': self.processed_count,
-                    'bad': self.bad_count,
-                    'time': datetime.now().isoformat()
-                }, f, ensure_ascii=False, indent=2)
-            
-            self.log(f"\n✅ 转码完成：成功 {self.processed_count} 个，失败 {self.bad_count} 个")
-            self.log(f"清单已保存：{manifest_path}")
-            
-            self.is_processing = False
-            self.progress_var.set(100)
-            self.status_var.set(f"转码完成：{self.processed_count} 成功，{self.bad_count} 失败")
-            self.transcode_btn.config(state="disabled")
-            self.scan_btn.config(state="normal")
-            self.upload_btn.config(state="normal" if self.processed_count > 0 else "disabled")
-            
-            # 存储 manifest 路径供上传使用
-            self.manifest_path = manifest_path
-        
-        threading.Thread(target=run_transcode, daemon=True).start()
-    
-    def is_bad_video(self, info):
-        """检测坏片"""
-        reasons = []
-        if info['duration'] < 2:
-            reasons.append(f"时长过短 ({info['duration']:.1f}s)")
-        if info['height'] < 360:
-            reasons.append(f"分辨率过低 ({info['width']}x{info['height']})")
-        if info['size'] < 102400:
-            reasons.append(f"文件大小异常 ({info['size']/1024:.1f}KB)")
-        return len(reasons) > 0, reasons
-    
-    def transcode_to_proxy(self, input_path, output_path):
-        """转码为 720p proxy"""
-        cmd = [
-            FFMPEG, '-y',
-            '-i', input_path,
-            '-vf', f'scale={PROXY_WIDTH}:{PROXY_HEIGHT}:force_original_aspect_ratio=decrease,pad={PROXY_WIDTH}:{PROXY_HEIGHT}:(ow-iw)/2:(oh-ih)/2',
-            '-c:v', 'libx264',
-            '-preset', 'fast',
-            '-b:v', '3M',
-            '-r', str(PROXY_FPS),
-            '-pix_fmt', 'yuv420p',
-            '-movflags', '+faststart',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            output_path
-        ]
+        manifest_path = os.path.join(self.output_dir, MANIFEST_FILE)
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            return result.returncode == 0
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(self.manifest, f, indent=2, ensure_ascii=False)
+            self.log(f"清单已保存：{manifest_path}")
+            messagebox.showinfo("成功", f"清单已保存到：\n{manifest_path}")
         except Exception as e:
-            self.log(f"  转码错误：{e}")
-            return False
-    
-    def compute_file_hash(self, file_path):
-        """计算文件 SHA256 哈希"""
-        sha256 = hashlib.sha256()
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
-                sha256.update(chunk)
-        return sha256.hexdigest()
-    
-    def update_item_status(self, index, status):
-        """更新列表项状态"""
-        items = self.tree.get_children()
-        if index < len(items):
-            values = list(self.tree.item(items[index])['values'])
-            values[4] = status
-            self.tree.item(items[index], values=values)
-    
-    def upload_all(self):
-        """上传到 TOS"""
-        if not hasattr(self, 'manifest_path'):
-            messagebox.showerror("错误", "请先完成转码")
-            return
-        
-        messagebox.showinfo("提示", "TOS 上传功能需要配置凭据\n当前版本仅生成上传清单\n下一步将实现真实上传")
-        self.log("TOS 上传：需要配置 TOS_ACCESS_KEY 和 TOS_SECRET_KEY 环境变量")
-        self.status_var.set("TOS 上传需配置凭据")
+            messagebox.showerror("错误", f"保存清单失败：{e}")
+
 
 def main():
     root = tk.Tk()
-    app = IngestHelperGUI(root)
+    app = IngestHelperApp(root)
     root.mainloop()
+
 
 if __name__ == '__main__':
     main()
