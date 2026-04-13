@@ -28,34 +28,6 @@ jobs:
         run: pyinstaller --onefile --windowed --name ingest_helper_v10 windows_ingest_helper/main.py
       - name: Copy exe
         run: Copy-Item dist\ingest_helper_v10.exe Windows_Release\
-      - name: Create version.txt
-        run: |
-          $runId = "${{ github.run_id }}"
-          $commitSha = "${{ github.sha }}"
-          $buildTime = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
-          @"
-Windows Ingest Helper - Version Information
-============================================
-
-Version: v10
-Build Time: $buildTime
-GitHub Run ID: $runId
-Commit SHA: $commitSha
-
-FIX in v10:
-- Fixed ffmpeg path detection logic
-- Added detailed debug output for path diagnosis
-- Correctly locates bin/ffmpeg.exe relative to exe directory
-
-Usage:
-1. Unzip to any folder
-2. Run ingest_helper_v10.exe
-3. Click "上传配置" to set TOS credentials
-4. Select source folder, click "扫描素材"
-5. Select output folder, click "批量转码"
-6. Click "上传 TOS" to upload
-7. Click "保存清单" to save manifest
-"@ | Out-File -FilePath Windows_Release\version.txt -Encoding utf8
       - name: Create ZIP
         run: Compress-Archive -Path Windows_Release\* -DestinationPath Windows_Ingest_Helper_v10.zip -Force
       - uses: actions/upload-artifact@v4
@@ -63,10 +35,10 @@ Usage:
           name: windows-release-v10
           path: Windows_Ingest_Helper_v10.zip
       - name: Upload TOS
-        if: '${{ env.TOS_AK != '' }}'
+        if: ${{ env.TOS_AK != '' }}
         run: |
           $env:TOS_KEY="Windows_Executable/Windows_Ingest_Helper_v10.zip"
           python .github/upload_tos_v10.py
         env:
-          TOS_AK: '${{ secrets.TOS_AK }}'
-          TOS_SK: '${{ secrets.TOS_SK }}'
+          TOS_AK: ${{ secrets.TOS_AK }}
+          TOS_SK: ${{ secrets.TOS_SK }}
