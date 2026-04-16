@@ -100,14 +100,14 @@ class IngestHelperGUI:
         """查找 ffmpeg/ffprobe 路径"""
         global FFMPEG, FFPROBE
 
-        # 在 PyInstaller --onefile 模式下，__file__ 指向临时解压目录
-        # 必须用 sys.executable 来获取 EXE 所在目录
+        # 在 PyInstaller --onefile 模式下，资源解压到 _MEIPASS
+        # --add-data 打包的 bin/ 会出现在 _MEIPASS/bin/
         if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(os.path.abspath(sys.executable))
+            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
         else:
             base_dir = os.path.dirname(os.path.abspath(__file__))
 
-        # 1. 同目录 bin/
+        # 1. bin/ 目录（打包的或同级的）
         bin_dir = os.path.join(base_dir, "bin")
         if os.name == "nt":
             for name in ("ffmpeg.exe", "ffprobe.exe"):
@@ -117,7 +117,8 @@ class IngestHelperGUI:
                         FFMPEG = p
                     else:
                         FFPROBE = p
-        # 2. 同目录
+                    self.log(f"  找到 {name}: {p}")
+        # 2. 直接放在 base_dir 下
         for name in ("ffmpeg.exe", "ffprobe"):
             p = os.path.join(base_dir, name)
             if os.path.exists(p) and name.startswith("ffm"):
@@ -126,6 +127,21 @@ class IngestHelperGUI:
             p = os.path.join(base_dir, name)
             if os.path.exists(p) and name.startswith("ffp"):
                 FFPROBE = p
+        
+        # 3. 系统 PATH
+        if FFMPEG == "ffmpeg":
+            for cmd in ["ffmpeg", "ffprobe"]:
+                import shutil
+                found = shutil.which(cmd)
+                if found:
+                    if cmd == "ffmpeg":
+                        FFMPEG = found
+                    else:
+                        FFPROBE = found
+                    self.log(f"  系统找到 {cmd}: {found}")
+
+        self.log(f"  FFMPEG = {FFMPEG}")
+        self.log(f"  FFPROBE = {FFPROBE}")
 
     # ============================================================
     # UI 设置
