@@ -1,0 +1,80 @@
+name: Build V15 GUI EXE v2.0
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller tos
+    
+    - name: Download ffmpeg
+      run: |
+        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
+        Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_extracted
+        $d = Get-ChildItem ffmpeg_extracted -Directory | Select-Object -First 1
+        New-Item -ItemType Directory -Force -Path Windows_Release\bin
+        Copy-Item "$($d.FullName)\bin\ffmpeg.exe" Windows_Release\bin\
+        Copy-Item "$($d.FullName)\bin\ffprobe.exe" Windows_Release\bin\
+        Remove-Item ffmpeg.zip, ffmpeg_extracted -Recurse -Force
+    
+    - name: Build GUI EXE
+      run: |
+        pyinstaller --onefile --windowed --name ingest_helper_v15_gui main_gui.py
+        Copy-Item dist\ingest_helper_v15_gui.exe Windows_Release\
+    
+    - name: Create release package
+      run: |
+        Copy-Item config.json.example Windows_Release\
+        Compress-Archive -Path Windows_Release\* -DestinationPath ingest_helper_v15_gui_0.2.0.zip -Force
+        Get-Item ingest_helper_v15_gui_0.2.0.zip | Select-Object Name, Length
+    
+    - uses: actions/upload-artifact@v4
+      with:
+        name: v15-gui-release
+        path: ingest_helper_v15_gui_0.2.0.zip
+        retention-days: 30
+    
+    - name: Upload to TOS
+      if: ${{ env.TOS_PUBLISH_AK != '' }}
+      run: |
+        python -c "
+        import os
+        from tos import TosClientV2
+        
+        TOS_AK = os.getenv('TOS_PUBLISH_AK')
+        TOS_SK = os.getenv('TOS_PUBLISH_SK')
+        if not TOS_AK or not TOS_SK:
+            print('TOS 凭据未配置，跳过上传')
+            exit(0)
+            
+        TOS_BUCKET = 'e23-video'
+        TOS_REGION = 'cn-beijing'
+        TOS_ENDPOINT = f'tos-{TOS_REGION}.volces.com'
+        
+        client = TosClientV2(ak=TOS_AK, sk=TOS_SK, endpoint=TOS_ENDPOINT, region=TOS_REGION)
+        
+        zip_path = 'ingest_helper_v15_gui_0.2.0.zip'
+        tos_key = 'Windows_Executable/ingest_helper_v15_gui_0.2.0.zip'
+        
+        print(f'Uploading {zip_path} to {tos_key}...')
+        client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)
+        print(f'Upload successful')
+        print(f'Download URL: https://{TOS_BUCKET}.{TOS_ENDPOINT}/{tos_key}')
+        "
+      env:
+        TOS_PUBLISH_AK: ${{ secrets.TOS_PUBLISH_AK }}
+        TOS_PUBLISH_SK: ${{ secrets.TOS_PUBLISH_SK }}
