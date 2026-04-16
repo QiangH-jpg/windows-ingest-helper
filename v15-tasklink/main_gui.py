@@ -137,6 +137,9 @@ class IngestHelperGUI:
             if found:
                 FFPROBE = found
 
+        # 诊断日志（在 setup_ui 之后调用）
+        self._ffmpeg_resolved = True
+
     # ============================================================
     # UI 设置
     # ============================================================
@@ -325,43 +328,65 @@ class IngestHelperGUI:
     # ============================================================
     # 元数据读取（增强错误处理，兼容 360 等杀毒软件环境）
     # ============================================================
+    # ============================================================
+    # 元数据读取（完整诊断日志）
+    # ============================================================
     def get_video_info(self, video_path):
         global FFPROBE
-        # 先检查 ffprobe 是否可用
-        if not os.path.exists(FFPROBE):
-            self.log(f"  ⚠️ ffprobe 不存在: {FFPROBE}")
-            # 尝试从 bin 目录查找
-            bin_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-            alt_ffprobe = os.path.join(bin_dir, "bin", "ffprobe.exe") if os.name == "nt" else os.path.join(bin_dir, "bin", "ffprobe")
-            if os.path.exists(alt_ffprobe):
-                self.log(f"  使用备用 ffprobe: {alt_ffprobe}")
-                FFPROBE = alt_ffprobe
-            else:
-                return None
+        ffprobe_path = FFPROBE
+
+        # 检查 ffprobe 是否存在
+        ffprobe_exists = os.path.exists(ffprobe_path) if ffprobe_path else False
+        video_exists = os.path.exists(video_path)
+
+        if not ffprobe_exists:
+            self.log(f"  [A] ffprobe 不存在: ffprobe_path={ffprobe_path}")
+            return None
+
+        if not video_exists:
+            self.log(f"  [B] 视频文件不存在: {video_path}")
+            return None
 
         cmd = [
-            FFPROBE, '-v', 'error',
+            ffprobe_path, '-v', 'error',
             '-show_entries', 'stream=width,height,duration,r_frame_rate,codec_name',
             '-show_entries', 'format=filename,size',
             '-of', 'json',
             video_path
         ]
+
+        # 首次调用打印完整诊断信息
+        if not getattr(self, '_probe_first_done', False):
+            self._probe_first_done = True
+            self.log(f"  [诊断] ffprobe_path={ffprobe_path}")
+            self.log(f"  [诊断] ffprobe_exists={ffprobe_exists}")
+            self.log(f"  [诊断] video_path={video_path}")
+            self.log(f"  [诊断] cmd={cmd}")
+
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
+            # 首个文件打印完整诊断
+            if not getattr(self, '_probe_first_done', False) or True:
+                if not getattr(self, '_probe_first_logged', False):
+                    self._probe_first_logged = True
+                    self.log(f"  [诊断] returncode={result.returncode}")
+                    self.log(f"  [诊断] stdout={repr(result.stdout[:500] if result.stdout else 'None')}")
+                    self.log(f"  [诊断] stderr={repr(result.stderr[:500] if result.stderr else 'None')}")
+
             # 处理 ffprobe 被杀毒软件拦截的情况
             if result.stdout is None or result.stdout.strip() == '':
                 err_msg = result.stderr.strip() if result.stderr else '无输出'
                 # 检测 360 拦截特征
                 if '拒绝访问' in err_msg or 'Access is denied' in err_msg or '不是有效的 Win32 应用程序' in err_msg:
-                    self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 被拦截（请检查杀毒软件）")
+                    self.log(f"  [C] {os.path.basename(video_path)}: ffprobe 被拦截（检查杀毒软件）")
                 elif result.returncode != 0:
-                    self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 错误 (exit {result.returncode}): {err_msg[:100]}")
+                    self.log(f"  [C] {os.path.basename(video_path)}: ffprobe 错误 (exit {result.returncode}): {err_msg[:200]}")
                 else:
-                    self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 无输出")
+                    self.log(f"  [D] {os.path.basename(video_path)}: ffprobe 无输出 (exit {result.returncode}), stderr={err_msg[:200]}")
                 return None
 
             data = json.loads(result.stdout)
@@ -376,20 +401,18 @@ class IngestHelperGUI:
                 'size': int(fmt.get('size', 0)),
             }
         except json.JSONDecodeError as e:
-            self.log(f"  ❌ {os.path.basename(video_path)}: JSON 解析失败: {e}")
+            self.log(f"  [E] {os.path.basename(video_path)}: JSON 解析失败: {e}")
             return None
         except subprocess.TimeoutExpired:
-            self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 超时")
+            self.log(f"  [F] {os.path.basename(video_path)}: ffprobe 超时")
             return None
         except FileNotFoundError:
-            self.log(f"  ❌ ffprobe 不存在: {FFPROBE}")
+            self.log(f"  [A] ffprobe 不存在: {FFPROBE}")
             return None
         except Exception as e:
-            self.log(f"  获取元数据失败：{os.path.basename(video_path)} - {e}")
+            self.log(f"  [G] {os.path.basename(video_path)}: {type(e).__name__}: {e}")
+            return None
 
-    # ============================================================
-    # 转码
-    # ============================================================
     def transcode_all(self):
         if not self.video_files:
             return
