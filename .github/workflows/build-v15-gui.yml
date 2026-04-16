@@ -4,26 +4,23 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'v15-tasklink/**'
-      - '.github/workflows/build-v15-gui.yml'
 
 jobs:
   build-windows:
     runs-on: windows-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller
-    
+
     - name: Download ffmpeg
       run: |
         Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
@@ -33,57 +30,37 @@ jobs:
         Copy-Item "$($d.FullName)\bin\ffmpeg.exe" release\bin\
         Copy-Item "$($d.FullName)\bin\ffprobe.exe" release\bin\
         Remove-Item ffmpeg.zip, ffmpeg_extracted -Recurse -Force
-    
+
     - name: Build GUI EXE
       working-directory: v15-tasklink
       run: |
         pyinstaller --onefile --windowed --name ingest_helper_v15_gui main_gui.py
         Copy-Item dist\ingest_helper_v15_gui.exe ..\release\
-    
+
     - name: Create release package
       run: |
-        # Create config.json.example if not exists
-        if (!(Test-Path "config\config.json")) {
-          @{
-            tos_ak = "your_tos_access_key"
-            tos_sk = "your_tos_secret_key"
-            tos_bucket = "e23-video"
-            tos_region = "cn-beijing"
-            server_url = "http://your-server:8088"
-          } | ConvertTo-Json | Out-File -FilePath config.json.example -Encoding UTF8
-          Move-Item config.json.example release\
-        } else {
+        if (Test-Path "config\config.json") {
           Copy-Item config\config.json release\config.json.example
+        } else {
+          New-Item release\config.json.example -ItemType File -Force
+          Set-Content release\config.json.example '{"note":"edit this file with your TOS credentials"}'
         }
-        
-        # Create README.txt
+
         @"
-V15 素材采集助手 GUI v2.0
-===========================
+V15 Video Ingest Helper GUI v2.0
 
-功能：
-1. 选择本地视频素材目录
-2. 扫描并预览素材
-3. 一键上传 TOS
-4. 自动触发云端处理
+Usage:
+1. Double-click ingest_helper_v15_gui.exe
+2. Select your video source folder
+3. Click "Scan Sources"
+4. Review and click "Upload"
 
-使用方法：
-1. 双击 ingest_helper_v15_gui.exe 启动
-2. 选择包含视频素材的文件夹
-3. 点击"扫描素材"
-4. 确认列表后点击"上传"
+Config: edit config.json with your TOS credentials
+"@ | Out-File -FilePath release\README.txt -Encoding UTF8
 
-配置文件：
-- 首次运行会生成 config.json，填入 TOS 凭证和服务器地址
-
-技术支持：
-- 项目仓库：https://github.com/QiangH-jpg/windows-ingest-helper
-"@ | Out-File -FilePath README.txt -Encoding UTF8
-        Move-Item README.txt release\
-        
         Compress-Archive -Path release\* -DestinationPath ingest_helper_v15_gui_v2.0.zip -Force
         Get-Item ingest_helper_v15_gui_v2.0.zip | Select-Object Name, Length
-    
+
     - uses: actions/upload-artifact@v4
       with:
         name: ingest_helper_v15_gui_v2.0
