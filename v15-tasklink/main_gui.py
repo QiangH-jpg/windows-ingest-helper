@@ -255,49 +255,45 @@ class IngestHelperGUI:
         self.scan_btn.config(state="disabled")
 
         def run_scan():
+            valid = 0
             for i, file_path in enumerate(self.video_files):
                 filename = os.path.basename(file_path)
                 info = self.get_video_info(file_path)
 
                 if not info:
                     # 无法读取
-                    self.root.after(0, self.tree.insert, "", "end", values=(
-                        filename, "-", "-", "-", "❌ 无法读取"
-                    ))
+                    vals = (filename, "-", "-", "-", "❌ 无法读取")
+                    self.root.after(0, lambda v=vals: self.tree.insert("", "end", values=v))
                     self.log(f"  ❌ {filename}：无法读取元数据")
-                    self.root.after(0, self._update_scan_progress, i + 1, total)
+                    self.root.after(0, lambda c=i+1, t=total: self._update_scan_progress(c, t))
                     continue
 
                 duration = info['duration']
 
                 # 短片筛除
                 if duration <= SHORT_DURATION_THRESHOLD:
-                    self.root.after(0, self.tree.insert, "", "end", values=(
-                        filename,
-                        format_duration(duration),
-                        f"{info['width']}x{info['height']}",
-                        format_size_mb(info['size']),
-                        "⏭️ 过短，已跳过"
-                    ))
+                    vals = (filename, format_duration(duration),
+                            f"{info['width']}x{info['height']}",
+                            format_size_mb(info['size']),
+                            "⏭️ 过短，已跳过")
+                    self.root.after(0, lambda v=vals: self.tree.insert("", "end", values=v))
                     self.log(f"  ⏭️ {filename}：时长过短（{format_duration(duration)}）")
-                    self.root.after(0, self._update_scan_progress, i + 1, total)
+                    self.root.after(0, lambda c=i+1, t=total: self._update_scan_progress(c, t))
                     continue
 
                 # 正常视频 → 逐条插入
-                self.root.after(0, self.tree.insert, "", "end", values=(
-                    filename,
-                    format_duration(duration),
-                    f"{info['width']}x{info['height']}",
-                    format_size_mb(info['size']),
-                    "待处理"
-                ))
+                valid += 1
+                vals = (filename, format_duration(duration),
+                        f"{info['width']}x{info['height']}",
+                        format_size_mb(info['size']),
+                        "待处理")
+                self.root.after(0, lambda v=vals: self.tree.insert("", "end", values=v))
                 self.log(f"  ✅ {filename}：{format_duration(duration)}，{info['width']}x{info['height']}")
-                self.root.after(0, self._update_scan_progress, i + 1, total)
+                self.root.after(0, lambda c=i+1, t=total: self._update_scan_progress(c, t))
 
             # 扫描完成
-            valid_count = sum(1 for item in self.tree.get_children()
-                            if "待处理" in str(self.tree.item(item)['values']))
-            self.root.after(0, self._scan_complete, valid_count, total)
+            skipped = total - valid
+            self.root.after(0, lambda v=valid, t=total: self._scan_complete(v, t))
 
         threading.Thread(target=run_scan, daemon=True).start()
 
