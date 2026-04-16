@@ -1,30 +1,11 @@
-name: Build V15 GUI EXE v2.0
+name: Test V15 Workflow
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
 
 jobs:
-  build:
-    runs-on: windows-latest
+  test:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: python -m pip install pyinstaller
-      - name: Build EXE
-        working-directory: v15-tasklink
-        run: pyinstaller --onefile --windowed --name ingest_helper_v15_gui main_gui.py
-      - name: Package
-        run: |
-          mkdir release
-          if (Test-Path "config\config.json") { Copy-Item config\config.json release\config.json.example }
-          Copy-Item v15-tasklink\dist\ingest_helper_v15_gui.exe release\
-          Compress-Archive -Path release\* -DestinationPath v15_gui_v2.0.zip -Force
-      - uses: actions/upload-artifact@v4
-        with:
-          name: v15-gui-v2.0
-          path: v15_gui_v2.0.zip
-          retention-days: 30
+      - run: echo "Hello World"
