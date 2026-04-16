@@ -313,9 +313,22 @@ class IngestHelperGUI:
         self.transcode_btn.config(state="normal" if valid_count > 0 else "disabled")
 
     # ============================================================
-    # 元数据读取
+    # 元数据读取（增强错误处理，兼容 360 等杀毒软件环境）
     # ============================================================
     def get_video_info(self, video_path):
+        # 先检查 ffprobe 是否可用
+        if not os.path.exists(FFPROBE):
+            self.log(f"  ⚠️ ffprobe 不存在: {FFPROBE}")
+            # 尝试从 bin 目录查找
+            bin_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
+            alt_ffprobe = os.path.join(bin_dir, "bin", "ffprobe.exe") if os.name == "nt" else os.path.join(bin_dir, "bin", "ffprobe")
+            if os.path.exists(alt_ffprobe):
+                self.log(f"  使用备用 ffprobe: {alt_ffprobe}")
+                global FFPROBE
+                FFPROBE = alt_ffprobe
+            else:
+                return None
+
         cmd = [
             FFPROBE, '-v', 'error',
             '-show_entries', 'stream=width,height,duration,r_frame_rate,codec_name',
@@ -328,6 +341,19 @@ class IngestHelperGUI:
                 cmd, capture_output=True, text=True, timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
+
+            # 处理 ffprobe 被杀毒软件拦截的情况
+            if result.stdout is None or result.stdout.strip() == '':
+                err_msg = result.stderr.strip() if result.stderr else '无输出'
+                # 检测 360 拦截特征
+                if '拒绝访问' in err_msg or 'Access is denied' in err_msg or '不是有效的 Win32 应用程序' in err_msg:
+                    self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 被拦截（请检查杀毒软件）")
+                elif result.returncode != 0:
+                    self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 错误 (exit {result.returncode}): {err_msg[:100]}")
+                else:
+                    self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 无输出")
+                return None
+
             data = json.loads(result.stdout)
             stream = data.get('streams', [{}])[0]
             fmt = data.get('format', {})
@@ -339,9 +365,17 @@ class IngestHelperGUI:
                 'codec': stream.get('codec_name', 'unknown'),
                 'size': int(fmt.get('size', 0)),
             }
+        except json.JSONDecodeError as e:
+            self.log(f"  ❌ {os.path.basename(video_path)}: JSON 解析失败: {e}")
+            return None
+        except subprocess.TimeoutExpired:
+            self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 超时")
+            return None
+        except FileNotFoundError:
+            self.log(f"  ❌ ffprobe 不存在: {FFPROBE}")
+            return None
         except Exception as e:
             self.log(f"  获取元数据失败：{os.path.basename(video_path)} - {e}")
-            return None
 
     # ============================================================
     # 转码
@@ -684,6 +718,7 @@ class IngestHelperGUI:
                 self.status_var.set(f"上传完成：{self.uploaded_count}/{total} 全部成功")
 
             self.log(f"\n✅ 全部完成！task_id: {self.task_id}")
+            self.log(f"任务已提交，正在打开云端工作台...")
             self._restore_buttons()
 
         threading.Thread(target=run_upload, daemon=True).start()
@@ -775,7 +810,7 @@ class IngestHelperGUI:
             ak = TOS_INGEST_AK or os.environ.get("TOS_INGEST_AK", "")
             sk = TOS_INGEST_SK or os.environ.get("TOS_INGEST_SK", "")
             if ak and sk:
-                self.log(f"  TOS SDK 直传...")
+            self.log(f"  云端上传中...")
                 client = TosClientV2(
                     ak=ak, sk=sk,
                     endpoint=TOS_ENDPOINT,
@@ -788,12 +823,12 @@ class IngestHelperGUI:
                 )
                 return True, None
             else:
-                self.log(f"  TOS 凭据未配置，尝试服务器代理...")
+                self.log(f"  通过服务器代理上传...")
         except ImportError:
-            self.log(f"  tos SDK 不可用，尝试服务器代理...")
+            self.log(f"  通过服务器代理上传...")
         except Exception as e:
-            self.log(f"  TOS SDK 直传失败: {e}")
-            self.log(f"  尝试服务器代理上传...")
+            self.log(f"  TOS 直传失败，切换服务器代理: {e}")
+            self.log(f"  通过服务器代理上传...")
 
         # --- 兜底: 服务器代理上传 ---
         if HAS_URLLIB:
