@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - 'v15-tasklink/**'
+      - '.github/workflows/build-v15-gui.yml'
 
 jobs:
   build-windows:
@@ -19,62 +22,70 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller tos
+        pip install pyinstaller
     
     - name: Download ffmpeg
       run: |
         Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
         Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_extracted
         $d = Get-ChildItem ffmpeg_extracted -Directory | Select-Object -First 1
-        New-Item -ItemType Directory -Force -Path Windows_Release\bin
-        Copy-Item "$($d.FullName)\bin\ffmpeg.exe" Windows_Release\bin\
-        Copy-Item "$($d.FullName)\bin\ffprobe.exe" Windows_Release\bin\
+        New-Item -ItemType Directory -Force -Path release\bin
+        Copy-Item "$($d.FullName)\bin\ffmpeg.exe" release\bin\
+        Copy-Item "$($d.FullName)\bin\ffprobe.exe" release\bin\
         Remove-Item ffmpeg.zip, ffmpeg_extracted -Recurse -Force
     
     - name: Build GUI EXE
+      working-directory: v15-tasklink
       run: |
         pyinstaller --onefile --windowed --name ingest_helper_v15_gui main_gui.py
-        Copy-Item dist\ingest_helper_v15_gui.exe Windows_Release\
+        Copy-Item dist\ingest_helper_v15_gui.exe ..\release\
     
     - name: Create release package
       run: |
-        Copy-Item config.json.example Windows_Release\
-        Compress-Archive -Path Windows_Release\* -DestinationPath ingest_helper_v15_gui_0.2.0.zip -Force
-        Get-Item ingest_helper_v15_gui_0.2.0.zip | Select-Object Name, Length
+        # Create config.json.example if not exists
+        if (!(Test-Path "config\config.json")) {
+          @{
+            tos_ak = "your_tos_access_key"
+            tos_sk = "your_tos_secret_key"
+            tos_bucket = "e23-video"
+            tos_region = "cn-beijing"
+            server_url = "http://your-server:8088"
+          } | ConvertTo-Json | Out-File -FilePath config.json.example -Encoding UTF8
+          Move-Item config.json.example release\
+        } else {
+          Copy-Item config\config.json release\config.json.example
+        }
+        
+        # Create README.txt
+        @"
+V15 素材采集助手 GUI v2.0
+===========================
+
+功能：
+1. 选择本地视频素材目录
+2. 扫描并预览素材
+3. 一键上传 TOS
+4. 自动触发云端处理
+
+使用方法：
+1. 双击 ingest_helper_v15_gui.exe 启动
+2. 选择包含视频素材的文件夹
+3. 点击"扫描素材"
+4. 确认列表后点击"上传"
+
+配置文件：
+- 首次运行会生成 config.json，填入 TOS 凭证和服务器地址
+
+技术支持：
+- 项目仓库：https://github.com/QiangH-jpg/windows-ingest-helper
+"@ | Out-File -FilePath README.txt -Encoding UTF8
+        Move-Item README.txt release\
+        
+        Compress-Archive -Path release\* -DestinationPath ingest_helper_v15_gui_v2.0.zip -Force
+        Get-Item ingest_helper_v15_gui_v2.0.zip | Select-Object Name, Length
     
     - uses: actions/upload-artifact@v4
       with:
-        name: v15-gui-release
-        path: ingest_helper_v15_gui_0.2.0.zip
+        name: ingest_helper_v15_gui_v2.0
+        path: ingest_helper_v15_gui_v2.0.zip
         retention-days: 30
-    
-    - name: Upload to TOS
-      if: ${{ env.TOS_PUBLISH_AK != '' }}
-      run: |
-        python -c "
-        import os
-        from tos import TosClientV2
-        
-        TOS_AK = os.getenv('TOS_PUBLISH_AK')
-        TOS_SK = os.getenv('TOS_PUBLISH_SK')
-        if not TOS_AK or not TOS_SK:
-            print('TOS 凭据未配置，跳过上传')
-            exit(0)
-            
-        TOS_BUCKET = 'e23-video'
-        TOS_REGION = 'cn-beijing'
-        TOS_ENDPOINT = f'tos-{TOS_REGION}.volces.com'
-        
-        client = TosClientV2(ak=TOS_AK, sk=TOS_SK, endpoint=TOS_ENDPOINT, region=TOS_REGION)
-        
-        zip_path = 'ingest_helper_v15_gui_0.2.0.zip'
-        tos_key = 'Windows_Executable/ingest_helper_v15_gui_0.2.0.zip'
-        
-        print(f'Uploading {zip_path} to {tos_key}...')
-        client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)
-        print(f'Upload successful')
-        print(f'Download URL: https://{TOS_BUCKET}.{TOS_ENDPOINT}/{tos_key}')
-        "
-      env:
-        TOS_PUBLISH_AK: ${{ secrets.TOS_PUBLISH_AK }}
-        TOS_PUBLISH_SK: ${{ secrets.TOS_PUBLISH_SK }}
