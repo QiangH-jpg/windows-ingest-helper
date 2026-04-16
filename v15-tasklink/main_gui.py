@@ -316,6 +316,7 @@ class IngestHelperGUI:
     # 元数据读取（增强错误处理，兼容 360 等杀毒软件环境）
     # ============================================================
     def get_video_info(self, video_path):
+        global FFPROBE
         # 先检查 ffprobe 是否可用
         if not os.path.exists(FFPROBE):
             self.log(f"  ⚠️ ffprobe 不存在: {FFPROBE}")
@@ -324,7 +325,6 @@ class IngestHelperGUI:
             alt_ffprobe = os.path.join(bin_dir, "bin", "ffprobe.exe") if os.name == "nt" else os.path.join(bin_dir, "bin", "ffprobe")
             if os.path.exists(alt_ffprobe):
                 self.log(f"  使用备用 ffprobe: {alt_ffprobe}")
-                global FFPROBE
                 FFPROBE = alt_ffprobe
             else:
                 return None
@@ -810,7 +810,7 @@ class IngestHelperGUI:
             ak = TOS_INGEST_AK or os.environ.get("TOS_INGEST_AK", "")
             sk = TOS_INGEST_SK or os.environ.get("TOS_INGEST_SK", "")
             if ak and sk:
-            self.log(f"  云端上传中...")
+                self.log(f"  云端上传中...")
                 client = TosClientV2(
                     ak=ak, sk=sk,
                     endpoint=TOS_ENDPOINT,
