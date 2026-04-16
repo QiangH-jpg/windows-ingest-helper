@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Windows 上传/预处理助手 v2.0
+Windows 上传/预处理助手 v2.1
 主入口 - GUI 版本（接入 task_id 链路）
 
-新链路：
-- 上传前调用 task/init 获取 task_id + task_url
-- TOS 路径固定为 windows_ingest/YYYY-MM-DD/<task_id>/
-- 上传完成后调用 notify
-- notify 成功后自动打开对应任务页
+v2.1 修复：
+- 修通上传主链（服务器代理上传）
+- 扫描逐条刷新（后台线程）
+- 短片/无效片初筛恢复
+- 时长显示中文口径（秒）
 
 运行方式：
     Windows: 双击 main_gui.exe
@@ -22,6 +22,7 @@ from datetime import datetime
 import threading
 import subprocess
 import hashlib
+import base64
 import webbrowser
 from pathlib import Path
 
@@ -57,10 +58,20 @@ PROXY_FPS = 25
 SHORT_DURATION_THRESHOLD = 1.5  # 秒
 
 
+def format_duration(seconds):
+    """格式化时长为中文口径：4.5秒"""
+    return f"{seconds:.1f}秒"
+
+
+def format_size_mb(size_bytes):
+    """格式化大小：12.3MB"""
+    return f"{size_bytes / 1024 / 1024:.1f}MB"
+
+
 class IngestHelperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Windows 上传/预处理助手 v2.0")
+        self.root.title("Windows 上传/预处理助手 v2.1")
         self.root.geometry("900x700")
 
         # 状态变量
@@ -71,6 +82,7 @@ class IngestHelperGUI:
         self.processed_count = 0
         self.bad_count = 0
         self.uploaded_count = 0
+        self.scan_count = 0  # 已扫描文件数
 
         # 新链路状态
         self.task_id = None
@@ -147,7 +159,7 @@ class IngestHelperGUI:
         self.tree.column("duration", width=80)
         self.tree.column("resolution", width=100)
         self.tree.column("size", width=80)
-        self.tree.column("status", width=150)
+        self.tree.column("status", width=180)
 
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -209,7 +221,7 @@ class IngestHelperGUI:
             self.log(f"选择输出目录：{directory}")
 
     # ============================================================
-    # 扫描
+    # 扫描（后台线程 + 逐条刷新 + 短片初筛）
     # ============================================================
     def scan_videos(self):
         input_dir = self.input_dir.get()
@@ -217,13 +229,13 @@ class IngestHelperGUI:
             messagebox.showerror("错误", "请先选择有效的素材目录")
             return
 
-        self.log(f"开始扫描：{input_dir}")
-        self.status_var.set("正在扫描...")
-
+        # 清空列表
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.video_files = []
+        self.scan_count = 0
 
+        # 收集文件
         video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.m4v'}
         for root, dirs, files in os.walk(input_dir):
             for file in files:
@@ -231,31 +243,78 @@ class IngestHelperGUI:
                     file_path = os.path.join(root, file)
                     self.video_files.append(file_path)
 
-        self.log(f"找到 {len(self.video_files)} 个视频文件")
+        total = len(self.video_files)
+        if total == 0:
+            self.log("未找到视频文件")
+            self.status_var.set("未找到视频文件")
+            return
 
-        for i, file_path in enumerate(self.video_files):
-            info = self.get_video_info(file_path)
-            if info:
-                size_mb = info['size'] / 1024 / 1024
-                self.tree.insert("", "end", values=(
-                    os.path.basename(file_path),
-                    f"{info['duration']:.1f}s",
+        self.log(f"找到 {total} 个视频文件，开始扫描...")
+        self.status_var.set(f"正在扫描 0/{total}...")
+        self.progress_var.set(0)
+        self.scan_btn.config(state="disabled")
+
+        def run_scan():
+            for i, file_path in enumerate(self.video_files):
+                filename = os.path.basename(file_path)
+                info = self.get_video_info(file_path)
+
+                if not info:
+                    # 无法读取
+                    self.root.after(0, self.tree.insert, "", "end", values=(
+                        filename, "-", "-", "-", "❌ 无法读取"
+                    ))
+                    self.log(f"  ❌ {filename}：无法读取元数据")
+                    self.root.after(0, self._update_scan_progress, i + 1, total)
+                    continue
+
+                duration = info['duration']
+
+                # 短片筛除
+                if duration <= SHORT_DURATION_THRESHOLD:
+                    self.root.after(0, self.tree.insert, "", "end", values=(
+                        filename,
+                        format_duration(duration),
+                        f"{info['width']}x{info['height']}",
+                        format_size_mb(info['size']),
+                        "⏭️ 过短，已跳过"
+                    ))
+                    self.log(f"  ⏭️ {filename}：时长过短（{format_duration(duration)}）")
+                    self.root.after(0, self._update_scan_progress, i + 1, total)
+                    continue
+
+                # 正常视频 → 逐条插入
+                self.root.after(0, self.tree.insert, "", "end", values=(
+                    filename,
+                    format_duration(duration),
                     f"{info['width']}x{info['height']}",
-                    f"{size_mb:.1f}MB",
+                    format_size_mb(info['size']),
                     "待处理"
                 ))
-            else:
-                self.tree.insert("", "end", values=(
-                    os.path.basename(file_path),
-                    "-",
-                    "-",
-                    "-",
-                    "❌ 无法读取"
-                ))
+                self.log(f"  ✅ {filename}：{format_duration(duration)}，{info['width']}x{info['height']}")
+                self.root.after(0, self._update_scan_progress, i + 1, total)
 
-        self.status_var.set(f"扫描完成：{len(self.video_files)} 个文件")
-        self.transcode_btn.config(state="normal" if self.video_files else "disabled")
-        self.log("扫描完成")
+            # 扫描完成
+            valid_count = sum(1 for item in self.tree.get_children()
+                            if "待处理" in str(self.tree.item(item)['values']))
+            self.root.after(0, self._scan_complete, valid_count, total)
+
+        threading.Thread(target=run_scan, daemon=True).start()
+
+    def _update_scan_progress(self, current, total):
+        """更新扫描进度（在主线程调用）"""
+        self.status_var.set(f"正在扫描 {current}/{total}...")
+        self.progress_var.set(int(current / total * 100))
+
+    def _scan_complete(self, valid_count, total):
+        """扫描完成回调"""
+        skipped = total - valid_count
+        self.scan_count = valid_count
+        self.progress_var.set(100)
+        self.status_var.set(f"扫描完成：{valid_count} 个有效，{skipped} 个跳过")
+        self.log(f"扫描完成：{valid_count} 个有效文件，{skipped} 个过短/无效文件已跳过")
+        self.scan_btn.config(state="normal")
+        self.transcode_btn.config(state="normal" if valid_count > 0 else "disabled")
 
     # ============================================================
     # 元数据读取
@@ -306,7 +365,7 @@ class IngestHelperGUI:
         os.makedirs(logs_dir, exist_ok=True)
 
         manifest = {
-            'version': '2.0',
+            'version': '2.1',
             'created_at': datetime.now().isoformat(),
             'input_directory': self.input_dir.get(),
             'total_files': len(self.video_files),
@@ -319,19 +378,56 @@ class IngestHelperGUI:
             self.processed_count = 0
             self.bad_count = 0
 
-            for i, video_path in enumerate(self.video_files):
-                progress = int((i + 1) / len(self.video_files) * 100)
+            # 从 Treeview 获取所有已扫描项
+            items = self.tree.get_children()
+            for i, item_id in enumerate(items):
+                values = self.tree.item(item_id)['values']
+                filename = values[0]
+                status = values[4]
+
+                progress = int((i + 1) / len(items) * 100)
                 self.progress_var.set(progress)
-                self.status_var.set(f"处理中：{i+1}/{len(self.video_files)}")
+                self.status_var.set(f"处理中：{i+1}/{len(items)}")
 
-                filename = os.path.basename(video_path)
-                self.log(f"[{i+1}/{len(self.video_files)}] {filename}")
+                self.log(f"[{i+1}/{len(items)}] {filename}")
 
-                info = self.get_video_info(video_path)
+                # 过短/无效文件跳过
+                if "过短" in status or "无法读取" in status:
+                    self.log(f"  ⏭️ 已跳过")
+                    manifest['bad_files'].append({
+                        'original_path': '',
+                        'original_filename': filename,
+                        'reasons': [status],
+                        'status': 'skipped_scan'
+                    })
+                    self.bad_count += 1
+                    continue
+
+                # 查找原始文件路径
+                file_path = None
+                for fp in self.video_files:
+                    if os.path.basename(fp) == filename:
+                        file_path = fp
+                        break
+
+                if not file_path or not os.path.exists(file_path):
+                    self.log(f"  ❌ 文件不存在")
+                    manifest['bad_files'].append({
+                        'original_path': '',
+                        'original_filename': filename,
+                        'reason': '文件不存在',
+                        'status': 'bad'
+                    })
+                    self.bad_count += 1
+                    self.update_item_status(i, "❌ 文件不存在")
+                    continue
+
+                info = self.get_video_info(file_path)
                 if not info:
                     self.log(f"  ❌ 无法读取元数据")
                     manifest['bad_files'].append({
-                        'original_path': video_path,
+                        'original_path': file_path,
+                        'original_filename': filename,
                         'reason': '无法读取元数据',
                         'status': 'bad'
                     })
@@ -339,17 +435,18 @@ class IngestHelperGUI:
                     self.update_item_status(i, "❌ 无法读取")
                     continue
 
-                # 短片筛除（≤1.5 秒）
+                # 短片二次筛除
                 if info['duration'] <= SHORT_DURATION_THRESHOLD:
-                    self.log(f"  ⚠️ 跳过短片 ({info['duration']:.1f}s)")
+                    self.log(f"  ⏭️ 跳过短片 ({format_duration(info['duration'])})")
                     manifest['bad_files'].append({
-                        'original_path': video_path,
+                        'original_path': file_path,
+                        'original_filename': filename,
                         'original_info': info,
-                        'reasons': [f"时长过短 ({info['duration']:.1f}s)"],
+                        'reasons': [f"时长过短 ({format_duration(info['duration'])})"],
                         'status': 'skipped_short'
                     })
                     self.bad_count += 1
-                    self.update_item_status(i, f"⚠️ 跳过：{info['duration']:.1f}s")
+                    self.update_item_status(i, f"⏭️ 跳过：{format_duration(info['duration'])}")
                     continue
 
                 # 坏片检测
@@ -357,7 +454,8 @@ class IngestHelperGUI:
                 if is_bad:
                     self.log(f"  ❌ 坏片：{', '.join(reasons)}")
                     manifest['bad_files'].append({
-                        'original_path': video_path,
+                        'original_path': file_path,
+                        'original_filename': filename,
                         'original_info': info,
                         'reasons': reasons,
                         'status': 'bad'
@@ -366,17 +464,17 @@ class IngestHelperGUI:
                     self.update_item_status(i, f"❌ 坏片：{reasons[0]}")
                     continue
 
-                proxy_filename = f"proxy_{i:04d}_{Path(video_path).stem}.mp4"
+                proxy_filename = f"proxy_{i:04d}_{Path(file_path).stem}.mp4"
                 proxy_path = os.path.join(proxy_dir, proxy_filename)
 
                 self.log(f"  转码 720p proxy...")
-                if self._transcode_one(video_path, proxy_path):
+                if self._transcode_one(file_path, proxy_path):
                     proxy_size = os.path.getsize(proxy_path)
                     self.log(f"  ✅ 转码成功 {proxy_size/1024/1024:.1f}MB")
-                    file_hash = self.compute_file_hash(video_path)
+                    file_hash = self.compute_file_hash(file_path)
                     manifest['processed_files'].append({
                         'index': i,
-                        'original_path': video_path,
+                        'original_path': file_path,
                         'original_filename': filename,
                         'original_info': info,
                         'file_hash': file_hash,
@@ -403,7 +501,7 @@ class IngestHelperGUI:
                 json.dump({
                     'input_directory': self.input_dir.get(),
                     'output_directory': output_dir,
-                    'total_files': len(self.video_files),
+                    'total_files': len(items),
                     'processed': self.processed_count,
                     'bad': self.bad_count,
                     'time': datetime.now().isoformat()
@@ -501,7 +599,7 @@ class IngestHelperGUI:
             self.status_var.set("初始化任务...")
             task_id, task_url, tos_prefix = self._call_task_init(processed)
             if not task_id:
-                self.log("❌ task/init 失败，终止上传", "ERROR")
+                self.log("❌ task/init 失败，终止上传")
                 self.status_var.set("上传失败")
                 self._restore_buttons()
                 return
@@ -522,7 +620,6 @@ class IngestHelperGUI:
             for i, item in enumerate(processed):
                 proxy_path = item.get('proxy_path', '')
                 original_filename = item.get('original_filename', os.path.basename(proxy_path))
-                # 统一使用原始文件名上传
                 tos_key = f"{tos_prefix}{original_filename}"
 
                 progress = int((i + 1) / total * 100)
@@ -553,7 +650,7 @@ class IngestHelperGUI:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
 
             if not self.uploaded_tos_keys:
-                self.log("❌ 没有文件上传成功，终止", "ERROR")
+                self.log("❌ 没有文件上传成功，终止")
                 self.status_var.set("上传失败")
                 self._restore_buttons()
                 return
@@ -606,7 +703,7 @@ class IngestHelperGUI:
     # ============================================================
     def _call_task_init(self, processed_files):
         if not HAS_URLLIB:
-            self.log("  ❌ urllib 不可用", "ERROR")
+            self.log("  ❌ urllib 不可用")
             return None, None, None
 
         url = f"{SERVER_URL}/api/ui/task/init"
@@ -662,19 +759,51 @@ class IngestHelperGUI:
 
     # ============================================================
     # 单文件上传到 TOS
+    # 主链：服务器代理上传（base64 编码通过 HTTP POST）
+    # 兜底：TOS SDK 直传（如果环境有 tos 包和 AK/SK）
     # ============================================================
     def _upload_one(self, local_path, tos_key):
         """
         上传单个文件到 TOS。
 
-        优先级：
-        1. TOS SDK 直传（如果 tos 包可用且已配置 AK/SK）
-        2. 服务器代理（通过预签名 URL）
+        主链：服务器代理上传（通过 /api/ui/upload/presign 端点）
+        兜底：TOS SDK 直传（如果 tos 包可用且已配置 AK/SK）
         """
         if not os.path.exists(local_path):
             return False, f"文件不存在: {local_path}"
 
-        # --- 方式 1: TOS SDK 直传 ---
+        # --- 主链: 服务器代理上传 ---
+        if HAS_URLLIB:
+            try:
+                self.log(f"  通过服务器代理上传...")
+                presign_url = f"{SERVER_URL}/api/ui/upload/presign"
+
+                # 读取文件并 base64 编码
+                with open(local_path, 'rb') as f:
+                    file_data = base64.b64encode(f.read()).decode('ascii')
+
+                payload = json.dumps({
+                    "tos_key": tos_key,
+                    "file_base64": file_data,
+                }).encode("utf-8")
+
+                presign_req = urllib.request.Request(
+                    presign_url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(presign_req, timeout=300) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+
+                if result.get("success"):
+                    return True, None
+                else:
+                    return False, result.get("error", "unknown")
+            except Exception as e:
+                self.log(f"  服务器代理上传失败: {e}")
+
+        # --- 兜底: TOS SDK 直传 ---
         try:
             from tos import TosClientV2
             ak = TOS_INGEST_AK or os.environ.get("TOS_INGEST_AK", "")
@@ -695,33 +824,6 @@ class IngestHelperGUI:
             pass
         except Exception as e:
             self.log(f"  TOS SDK 直传失败: {e}")
-
-        # --- 方式 2: 服务器预签名 URL ---
-        if HAS_URLLIB:
-            try:
-                presign_url = f"{SERVER_URL}/api/ui/upload/presign"
-                presign_req = urllib.request.Request(
-                    presign_url,
-                    data=json.dumps({"tos_key": tos_key}).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST"
-                )
-                with urllib.request.urlopen(presign_req, timeout=30) as resp:
-                    presign_data = json.loads(resp.read().decode("utf-8"))
-                presigned = presign_data.get("url")
-                if presigned:
-                    with open(local_path, 'rb') as f:
-                        file_data = f.read()
-                    put_req = urllib.request.Request(
-                        presigned, data=file_data,
-                        method="PUT",
-                        headers={"Content-Type": "application/octet-stream"}
-                    )
-                    with urllib.request.urlopen(put_req, timeout=300) as resp:
-                        if resp.status == 200:
-                            return True, None
-            except Exception as e:
-                self.log(f"  服务器代理上传失败: {e}")
 
         return False, "TOS 上传失败：SDK 和服务器代理均不可用"
 
