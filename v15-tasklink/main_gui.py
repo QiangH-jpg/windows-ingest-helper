@@ -88,8 +88,14 @@ class IngestHelperGUI:
         """查找 ffmpeg/ffprobe 路径"""
         global FFMPEG, FFPROBE
 
+        # 在 PyInstaller --onefile 模式下，__file__ 指向临时解压目录
+        # 必须用 sys.executable 来获取 EXE 所在目录
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+
         # 1. 同目录 bin/
-        base_dir = os.path.dirname(os.path.abspath(__file__))
         bin_dir = os.path.join(base_dir, "bin")
         if os.name == "nt":
             for name in ("ffmpeg.exe", "ffprobe.exe"):
