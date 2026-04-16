@@ -755,26 +755,50 @@ class IngestHelperGUI:
 
     # ============================================================
     # 单文件上传到 TOS
-    # 主链：服务器代理上传（base64 编码通过 HTTP POST）
-    # 兜底：TOS SDK 直传（如果环境有 tos 包和 AK/SK）
+    # 主链：TOS SDK 直传（tos 包已随 PyInstaller 打包）
+    # 兜底：服务器代理上传（小文件可用）
     # ============================================================
     def _upload_one(self, local_path, tos_key):
         """
         上传单个文件到 TOS。
 
-        主链：服务器代理上传（通过 /api/ui/upload/presign 端点）
-        兜底：TOS SDK 直传（如果 tos 包可用且已配置 AK/SK）
+        主链：TOS SDK 直传（tos 包随 EXE 打包，内置 AK/SK）
+        兜底：服务器代理上传（/api/ui/upload/presign）
         """
         if not os.path.exists(local_path):
             return False, f"文件不存在: {local_path}"
 
-        # --- 主链: 服务器代理上传 ---
+        # --- 主链: TOS SDK 直传 ---
+        try:
+            from tos import TosClientV2
+            # 内置凭据（随 EXE 打包）
+            ak = TOS_INGEST_AK or os.environ.get("TOS_INGEST_AK", "")
+            sk = TOS_INGEST_SK or os.environ.get("TOS_INGEST_SK", "")
+            if ak and sk:
+                self.log(f"  TOS SDK 直传...")
+                client = TosClientV2(
+                    ak=ak, sk=sk,
+                    endpoint=TOS_ENDPOINT,
+                    region=TOS_REGION,
+                )
+                client.put_object_from_file(
+                    bucket=TOS_BUCKET,
+                    key=tos_key,
+                    file_path=local_path,
+                )
+                return True, None
+            else:
+                self.log(f"  TOS 凭据未配置，尝试服务器代理...")
+        except ImportError:
+            self.log(f"  tos SDK 不可用，尝试服务器代理...")
+        except Exception as e:
+            self.log(f"  TOS SDK 直传失败: {e}")
+            self.log(f"  尝试服务器代理上传...")
+
+        # --- 兜底: 服务器代理上传 ---
         if HAS_URLLIB:
             try:
-                self.log(f"  通过服务器代理上传...")
                 presign_url = f"{SERVER_URL}/api/ui/upload/presign"
-
-                # 读取文件并 base64 编码
                 with open(local_path, 'rb') as f:
                     file_data = base64.b64encode(f.read()).decode('ascii')
 
@@ -799,29 +823,7 @@ class IngestHelperGUI:
             except Exception as e:
                 self.log(f"  服务器代理上传失败: {e}")
 
-        # --- 兜底: TOS SDK 直传 ---
-        try:
-            from tos import TosClientV2
-            ak = TOS_INGEST_AK or os.environ.get("TOS_INGEST_AK", "")
-            sk = TOS_INGEST_SK or os.environ.get("TOS_INGEST_SK", "")
-            if ak and sk:
-                client = TosClientV2(
-                    ak=ak, sk=sk,
-                    endpoint=TOS_ENDPOINT,
-                    region=TOS_REGION,
-                )
-                client.put_object_from_file(
-                    bucket=TOS_BUCKET,
-                    key=tos_key,
-                    file_path=local_path,
-                )
-                return True, None
-        except ImportError:
-            pass
-        except Exception as e:
-            self.log(f"  TOS SDK 直传失败: {e}")
-
-        return False, "TOS 上传失败：SDK 和服务器代理均不可用"
+        return False, "TOS 上传失败"
 
 
 def main():
