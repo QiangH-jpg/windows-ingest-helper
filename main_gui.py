@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Windows 上传/预处理助手 v2.0
-主入口 - GUI 版本（接入 task_id 链路）
+Windows 上传/预处理助手 v3.0 — onedir 正式版
 
-新链路：
-- 上传前调用 task/init 获取 task_id + task_url
-- TOS 路径固定为 windows_ingest/YYYY-MM-DD/<task_id>/
-- 上传完成后调用 notify
-- notify 成功后自动打开对应任务页
+v3.0 核心变更：
+- 放弃 onefile 分发，改用 onedir（主EXE + bin/ffmpeg.exe + bin/ffprobe.exe）
+- ffmpeg/ffprobe 只从 程序目录/bin 查找，不依赖 _MEIPASS 临时目录
+- 启动时打印程序目录、bin 路径、文件存在性
+- bin 缺失时明确报错"分发包缺失 ffprobe"
 
 运行方式：
     Windows: 双击 main_gui.exe
@@ -22,6 +21,7 @@ from datetime import datetime
 import threading
 import subprocess
 import hashlib
+import base64
 import webbrowser
 from pathlib import Path
 
@@ -57,10 +57,20 @@ PROXY_FPS = 25
 SHORT_DURATION_THRESHOLD = 1.5  # 秒
 
 
+def format_duration(seconds):
+    """格式化时长为中文口径：4.5秒"""
+    return f"{seconds:.1f}秒"
+
+
+def format_size_mb(size_bytes):
+    """格式化大小：12.3MB"""
+    return f"{size_bytes / 1024 / 1024:.1f}MB"
+
+
 class IngestHelperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Windows 上传/预处理助手 v2.0")
+        self.root.title("Windows 上传/预处理助手 v3.0")
         self.root.geometry("900x700")
 
         # 状态变量
@@ -71,6 +81,7 @@ class IngestHelperGUI:
         self.processed_count = 0
         self.bad_count = 0
         self.uploaded_count = 0
+        self.scan_count = 0  # 已扫描文件数
 
         # 新链路状态
         self.task_id = None
@@ -85,29 +96,37 @@ class IngestHelperGUI:
         self.setup_ui()
 
     def _resolve_ffmpeg(self):
-        """查找 ffmpeg/ffprobe 路径"""
+        """查找 ffmpeg/ffprobe 路径 — onedir 方案：只从程序目录/bin 查找"""
         global FFMPEG, FFPROBE
 
-        # 1. 同目录 bin/
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        bin_dir = os.path.join(base_dir, "bin")
-        if os.name == "nt":
-            for name in ("ffmpeg.exe", "ffprobe.exe"):
-                p = os.path.join(bin_dir, name)
-                if os.path.exists(p):
-                    if name == "ffmpeg.exe":
-                        FFMPEG = p
-                    else:
-                        FFPROBE = p
-        # 2. 同目录
-        for name in ("ffmpeg.exe", "ffprobe"):
-            p = os.path.join(base_dir, name)
-            if os.path.exists(p) and name.startswith("ffm"):
-                FFMPEG = p
-        for name in ("ffprobe.exe", "ffprobe"):
-            p = os.path.join(base_dir, name)
-            if os.path.exists(p) and name.startswith("ffp"):
-                FFPROBE = p
+        # 【onedir 核心规则】无论是否 frozen，程序目录 = exe 所在目录
+        # --onedir 模式下：sys.executable 就是 <程序目录>/主程序.exe
+        # 源码开发模式下：__file__ 所在目录即程序目录
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+
+        bin_dir = os.path.join(app_dir, "bin")
+
+        # 只在 bin/ 目录下查找，不兜底系统 PATH
+        ffmpeg_path = os.path.join(bin_dir, "ffmpeg.exe")
+        ffprobe_path = os.path.join(bin_dir, "ffprobe.exe")
+
+        self._bin_dir = bin_dir
+        self._app_dir = app_dir
+
+        if os.path.exists(ffmpeg_path):
+            FFMPEG = ffmpeg_path
+        if os.path.exists(ffprobe_path):
+            FFPROBE = ffprobe_path
+
+        # 记录解析结果（setup_ui 中打印到日志）
+        self._ffmpeg_resolved = True
+        self._ffmpeg_path = FFMPEG
+        self._ffprobe_path = FFPROBE
+        self._ffmpeg_exists = os.path.exists(FFMPEG) if FFMPEG else False
+        self._ffprobe_exists = os.path.exists(FFPROBE) if FFPROBE else False
 
     # ============================================================
     # UI 设置
@@ -141,7 +160,7 @@ class IngestHelperGUI:
         self.tree.column("duration", width=80)
         self.tree.column("resolution", width=100)
         self.tree.column("size", width=80)
-        self.tree.column("status", width=150)
+        self.tree.column("status", width=180)
 
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -177,6 +196,26 @@ class IngestHelperGUI:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief="sunken")
         status_bar.pack(fill="x", padx=10, pady=5)
 
+        # 启动诊断日志
+        self._print_startup_diag()
+
+    def _print_startup_diag(self):
+        """启动时打印程序目录、bin 目录、ffprobe 路径"""
+        self.log("=" * 50)
+        self.log("Windows 上传/预处理助手 v3.0 — onedir 正式版")
+        self.log("=" * 50)
+        self.log(f"程序目录: {self._app_dir}")
+        self.log(f"bin 目录: {self._bin_dir}")
+        self.log(f"ffmpeg 路径: {self._ffmpeg_path}")
+        self.log(f"ffmpeg 存在: {'✅ 是' if self._ffmpeg_exists else '❌ 否'}")
+        self.log(f"ffprobe 路径: {self._ffprobe_path}")
+        self.log(f"ffprobe 存在: {'✅ 是' if self._ffprobe_exists else '❌ 否'}")
+        if not self._ffmpeg_exists or not self._ffprobe_exists:
+            self.log("⚠️ 分发包缺失 ffmpeg/ffprobe，请将 bin/ 目录放在程序同级位置")
+        else:
+            self.log("✅ ffmpeg/ffprobe 已就绪")
+        self.log("-" * 50)
+
     # ============================================================
     # 日志
     # ============================================================
@@ -203,7 +242,7 @@ class IngestHelperGUI:
             self.log(f"选择输出目录：{directory}")
 
     # ============================================================
-    # 扫描
+    # 扫描（后台线程 + 逐条刷新 + 短片初筛）
     # ============================================================
     def scan_videos(self):
         input_dir = self.input_dir.get()
@@ -211,13 +250,13 @@ class IngestHelperGUI:
             messagebox.showerror("错误", "请先选择有效的素材目录")
             return
 
-        self.log(f"开始扫描：{input_dir}")
-        self.status_var.set("正在扫描...")
-
+        # 清空列表
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.video_files = []
+        self.scan_count = 0
 
+        # 收集文件
         video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.m4v'}
         for root, dirs, files in os.walk(input_dir):
             for file in files:
@@ -225,48 +264,126 @@ class IngestHelperGUI:
                     file_path = os.path.join(root, file)
                     self.video_files.append(file_path)
 
-        self.log(f"找到 {len(self.video_files)} 个视频文件")
+        total = len(self.video_files)
+        if total == 0:
+            self.log("未找到视频文件")
+            self.status_var.set("未找到视频文件")
+            return
 
-        for i, file_path in enumerate(self.video_files):
-            info = self.get_video_info(file_path)
-            if info:
-                size_mb = info['size'] / 1024 / 1024
-                self.tree.insert("", "end", values=(
-                    os.path.basename(file_path),
-                    f"{info['duration']:.1f}s",
-                    f"{info['width']}x{info['height']}",
-                    f"{size_mb:.1f}MB",
-                    "待处理"
-                ))
-            else:
-                self.tree.insert("", "end", values=(
-                    os.path.basename(file_path),
-                    "-",
-                    "-",
-                    "-",
-                    "❌ 无法读取"
-                ))
+        self.log(f"找到 {total} 个视频文件，开始扫描...")
+        self.status_var.set(f"正在扫描 0/{total}...")
+        self.progress_var.set(0)
+        self.scan_btn.config(state="disabled")
 
-        self.status_var.set(f"扫描完成：{len(self.video_files)} 个文件")
-        self.transcode_btn.config(state="normal" if self.video_files else "disabled")
-        self.log("扫描完成")
+        def run_scan():
+            valid = 0
+            for i, file_path in enumerate(self.video_files):
+                filename = os.path.basename(file_path)
+                info = self.get_video_info(file_path)
+
+                if not info:
+                    # 无法读取
+                    vals = (filename, "-", "-", "-", "❌ 无法读取")
+                    self.root.after(0, lambda v=vals: self.tree.insert("", "end", values=v))
+                    self.log(f"  ❌ {filename}：无法读取元数据")
+                    self.root.after(0, lambda c=i+1, t=total: self._update_scan_progress(c, t))
+                    continue
+
+                duration = info['duration']
+
+                # 短片筛除
+                if duration <= SHORT_DURATION_THRESHOLD:
+                    vals = (filename, format_duration(duration),
+                            f"{info['width']}x{info['height']}",
+                            format_size_mb(info['size']),
+                            "⏭️ 过短，已跳过")
+                    self.root.after(0, lambda v=vals: self.tree.insert("", "end", values=v))
+                    self.log(f"  ⏭️ {filename}：时长过短（{format_duration(duration)}）")
+                    self.root.after(0, lambda c=i+1, t=total: self._update_scan_progress(c, t))
+                    continue
+
+                # 正常视频 → 逐条插入
+                valid += 1
+                vals = (filename, format_duration(duration),
+                        f"{info['width']}x{info['height']}",
+                        format_size_mb(info['size']),
+                        "待处理")
+                self.root.after(0, lambda v=vals: self.tree.insert("", "end", values=v))
+                self.log(f"  ✅ {filename}：{format_duration(duration)}，{info['width']}x{info['height']}")
+                self.root.after(0, lambda c=i+1, t=total: self._update_scan_progress(c, t))
+
+            # 扫描完成
+            skipped = total - valid
+            self.root.after(0, lambda v=valid, t=total: self._scan_complete(v, t))
+
+        threading.Thread(target=run_scan, daemon=True).start()
+
+    def _update_scan_progress(self, current, total):
+        """更新扫描进度（在主线程调用）"""
+        self.status_var.set(f"正在扫描 {current}/{total}...")
+        self.progress_var.set(int(current / total * 100))
+
+    def _scan_complete(self, valid_count, total):
+        """扫描完成回调"""
+        skipped = total - valid_count
+        self.scan_count = valid_count
+        self.progress_var.set(100)
+        self.status_var.set(f"扫描完成：{valid_count} 个有效，{skipped} 个跳过")
+        self.log(f"扫描完成：{valid_count} 个有效文件，{skipped} 个过短/无效文件已跳过")
+        self.scan_btn.config(state="normal")
+        self.transcode_btn.config(state="normal" if valid_count > 0 else "disabled")
 
     # ============================================================
-    # 元数据读取
+    # 元数据读取（onedir 方案：只从 bin/ 读取 ffprobe）
     # ============================================================
     def get_video_info(self, video_path):
+        global FFPROBE
+        ffprobe_path = FFPROBE
+
+        # 【关键】如果 ffprobe 不在 bin 目录下，直接报错
+        if not ffprobe_path or ffprobe_path == "ffprobe":
+            self.log(f"  ❌ ffprobe 未找到 — 请确认 bin/ffprobe.exe 在程序目录下")
+            return None
+
+        ffprobe_exists = os.path.exists(ffprobe_path)
+        if not ffprobe_exists:
+            self.log(f"  ❌ ffprobe 文件不存在: {ffprobe_path}")
+            return None
+
+        if not os.path.exists(video_path):
+            self.log(f"  ❌ 视频文件不存在: {video_path}")
+            return None
+
+        # 首次调用打印完整诊断信息
+        if not getattr(self, '_probe_first_logged', False):
+            self._probe_first_logged = True
+            self.log(f"  [诊断] ffprobe={ffprobe_path}")
+
         cmd = [
-            FFPROBE, '-v', 'error',
+            ffprobe_path, '-v', 'error',
             '-show_entries', 'stream=width,height,duration,r_frame_rate,codec_name',
             '-show_entries', 'format=filename,size',
             '-of', 'json',
             video_path
         ]
+
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
+
+            if not getattr(self, '_probe_first_done', False):
+                self._probe_first_done = True
+                self.log(f"  [诊断] returncode={result.returncode}")
+                self.log(f"  [诊断] stdout={repr(result.stdout[:500] if result.stdout else 'None')}")
+                self.log(f"  [诊断] stderr={repr(result.stderr[:500] if result.stderr else 'None')}")
+
+            if result.stdout is None or result.stdout.strip() == '':
+                err_msg = result.stderr.strip() if result.stderr else '无输出'
+                self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 返回空 (exit {result.returncode})")
+                return None
+
             data = json.loads(result.stdout)
             stream = data.get('streams', [{}])[0]
             fmt = data.get('format', {})
@@ -278,13 +395,16 @@ class IngestHelperGUI:
                 'codec': stream.get('codec_name', 'unknown'),
                 'size': int(fmt.get('size', 0)),
             }
+        except json.JSONDecodeError as e:
+            self.log(f"  ❌ {os.path.basename(video_path)}: JSON 解析失败: {e}")
+            return None
+        except subprocess.TimeoutExpired:
+            self.log(f"  ❌ {os.path.basename(video_path)}: ffprobe 超时")
+            return None
         except Exception as e:
-            self.log(f"  获取元数据失败：{os.path.basename(video_path)} - {e}")
+            self.log(f"  ❌ {os.path.basename(video_path)}: {type(e).__name__}: {e}")
             return None
 
-    # ============================================================
-    # 转码
-    # ============================================================
     def transcode_all(self):
         if not self.video_files:
             return
@@ -300,7 +420,7 @@ class IngestHelperGUI:
         os.makedirs(logs_dir, exist_ok=True)
 
         manifest = {
-            'version': '2.0',
+            'version': '2.1',
             'created_at': datetime.now().isoformat(),
             'input_directory': self.input_dir.get(),
             'total_files': len(self.video_files),
@@ -313,19 +433,56 @@ class IngestHelperGUI:
             self.processed_count = 0
             self.bad_count = 0
 
-            for i, video_path in enumerate(self.video_files):
-                progress = int((i + 1) / len(self.video_files) * 100)
+            # 从 Treeview 获取所有已扫描项
+            items = self.tree.get_children()
+            for i, item_id in enumerate(items):
+                values = self.tree.item(item_id)['values']
+                filename = values[0]
+                status = values[4]
+
+                progress = int((i + 1) / len(items) * 100)
                 self.progress_var.set(progress)
-                self.status_var.set(f"处理中：{i+1}/{len(self.video_files)}")
+                self.status_var.set(f"处理中：{i+1}/{len(items)}")
 
-                filename = os.path.basename(video_path)
-                self.log(f"[{i+1}/{len(self.video_files)}] {filename}")
+                self.log(f"[{i+1}/{len(items)}] {filename}")
 
-                info = self.get_video_info(video_path)
+                # 过短/无效文件跳过
+                if "过短" in status or "无法读取" in status:
+                    self.log(f"  ⏭️ 已跳过")
+                    manifest['bad_files'].append({
+                        'original_path': '',
+                        'original_filename': filename,
+                        'reasons': [status],
+                        'status': 'skipped_scan'
+                    })
+                    self.bad_count += 1
+                    continue
+
+                # 查找原始文件路径
+                file_path = None
+                for fp in self.video_files:
+                    if os.path.basename(fp) == filename:
+                        file_path = fp
+                        break
+
+                if not file_path or not os.path.exists(file_path):
+                    self.log(f"  ❌ 文件不存在")
+                    manifest['bad_files'].append({
+                        'original_path': '',
+                        'original_filename': filename,
+                        'reason': '文件不存在',
+                        'status': 'bad'
+                    })
+                    self.bad_count += 1
+                    self.update_item_status(i, "❌ 文件不存在")
+                    continue
+
+                info = self.get_video_info(file_path)
                 if not info:
                     self.log(f"  ❌ 无法读取元数据")
                     manifest['bad_files'].append({
-                        'original_path': video_path,
+                        'original_path': file_path,
+                        'original_filename': filename,
                         'reason': '无法读取元数据',
                         'status': 'bad'
                     })
@@ -333,17 +490,18 @@ class IngestHelperGUI:
                     self.update_item_status(i, "❌ 无法读取")
                     continue
 
-                # 短片筛除（≤1.5 秒）
+                # 短片二次筛除
                 if info['duration'] <= SHORT_DURATION_THRESHOLD:
-                    self.log(f"  ⚠️ 跳过短片 ({info['duration']:.1f}s)")
+                    self.log(f"  ⏭️ 跳过短片 ({format_duration(info['duration'])})")
                     manifest['bad_files'].append({
-                        'original_path': video_path,
+                        'original_path': file_path,
+                        'original_filename': filename,
                         'original_info': info,
-                        'reasons': [f"时长过短 ({info['duration']:.1f}s)"],
+                        'reasons': [f"时长过短 ({format_duration(info['duration'])})"],
                         'status': 'skipped_short'
                     })
                     self.bad_count += 1
-                    self.update_item_status(i, f"⚠️ 跳过：{info['duration']:.1f}s")
+                    self.update_item_status(i, f"⏭️ 跳过：{format_duration(info['duration'])}")
                     continue
 
                 # 坏片检测
@@ -351,7 +509,8 @@ class IngestHelperGUI:
                 if is_bad:
                     self.log(f"  ❌ 坏片：{', '.join(reasons)}")
                     manifest['bad_files'].append({
-                        'original_path': video_path,
+                        'original_path': file_path,
+                        'original_filename': filename,
                         'original_info': info,
                         'reasons': reasons,
                         'status': 'bad'
@@ -360,17 +519,17 @@ class IngestHelperGUI:
                     self.update_item_status(i, f"❌ 坏片：{reasons[0]}")
                     continue
 
-                proxy_filename = f"proxy_{i:04d}_{Path(video_path).stem}.mp4"
+                proxy_filename = f"proxy_{i:04d}_{Path(file_path).stem}.mp4"
                 proxy_path = os.path.join(proxy_dir, proxy_filename)
 
                 self.log(f"  转码 720p proxy...")
-                if self._transcode_one(video_path, proxy_path):
+                if self._transcode_one(file_path, proxy_path):
                     proxy_size = os.path.getsize(proxy_path)
                     self.log(f"  ✅ 转码成功 {proxy_size/1024/1024:.1f}MB")
-                    file_hash = self.compute_file_hash(video_path)
+                    file_hash = self.compute_file_hash(file_path)
                     manifest['processed_files'].append({
                         'index': i,
-                        'original_path': video_path,
+                        'original_path': file_path,
                         'original_filename': filename,
                         'original_info': info,
                         'file_hash': file_hash,
@@ -397,7 +556,7 @@ class IngestHelperGUI:
                 json.dump({
                     'input_directory': self.input_dir.get(),
                     'output_directory': output_dir,
-                    'total_files': len(self.video_files),
+                    'total_files': len(items),
                     'processed': self.processed_count,
                     'bad': self.bad_count,
                     'time': datetime.now().isoformat()
@@ -495,7 +654,7 @@ class IngestHelperGUI:
             self.status_var.set("初始化任务...")
             task_id, task_url, tos_prefix = self._call_task_init(processed)
             if not task_id:
-                self.log("❌ task/init 失败，终止上传", "ERROR")
+                self.log("❌ task/init 失败，终止上传")
                 self.status_var.set("上传失败")
                 self._restore_buttons()
                 return
@@ -516,7 +675,6 @@ class IngestHelperGUI:
             for i, item in enumerate(processed):
                 proxy_path = item.get('proxy_path', '')
                 original_filename = item.get('original_filename', os.path.basename(proxy_path))
-                # 统一使用原始文件名上传
                 tos_key = f"{tos_prefix}{original_filename}"
 
                 progress = int((i + 1) / total * 100)
@@ -547,7 +705,7 @@ class IngestHelperGUI:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
 
             if not self.uploaded_tos_keys:
-                self.log("❌ 没有文件上传成功，终止", "ERROR")
+                self.log("❌ 没有文件上传成功，终止")
                 self.status_var.set("上传失败")
                 self._restore_buttons()
                 return
@@ -585,6 +743,7 @@ class IngestHelperGUI:
                 self.status_var.set(f"上传完成：{self.uploaded_count}/{total} 全部成功")
 
             self.log(f"\n✅ 全部完成！task_id: {self.task_id}")
+            self.log(f"任务已提交，正在打开云端工作台...")
             self._restore_buttons()
 
         threading.Thread(target=run_upload, daemon=True).start()
@@ -600,7 +759,7 @@ class IngestHelperGUI:
     # ============================================================
     def _call_task_init(self, processed_files):
         if not HAS_URLLIB:
-            self.log("  ❌ urllib 不可用", "ERROR")
+            self.log("  ❌ urllib 不可用")
             return None, None, None
 
         url = f"{SERVER_URL}/api/ui/task/init"
@@ -656,24 +815,27 @@ class IngestHelperGUI:
 
     # ============================================================
     # 单文件上传到 TOS
+    # 主链：TOS SDK 直传（tos 包已随 PyInstaller 打包）
+    # 兜底：服务器代理上传（小文件可用）
     # ============================================================
     def _upload_one(self, local_path, tos_key):
         """
         上传单个文件到 TOS。
 
-        优先级：
-        1. TOS SDK 直传（如果 tos 包可用且已配置 AK/SK）
-        2. 服务器代理（通过预签名 URL）
+        主链：TOS SDK 直传（tos 包随 EXE 打包，内置 AK/SK）
+        兜底：服务器代理上传（/api/ui/upload/presign）
         """
         if not os.path.exists(local_path):
             return False, f"文件不存在: {local_path}"
 
-        # --- 方式 1: TOS SDK 直传 ---
+        # --- 主链: TOS SDK 直传 ---
         try:
             from tos import TosClientV2
+            # 内置凭据（随 EXE 打包）
             ak = TOS_INGEST_AK or os.environ.get("TOS_INGEST_AK", "")
             sk = TOS_INGEST_SK or os.environ.get("TOS_INGEST_SK", "")
             if ak and sk:
+                self.log(f"  云端上传中...")
                 client = TosClientV2(
                     ak=ak, sk=sk,
                     endpoint=TOS_ENDPOINT,
@@ -685,39 +847,43 @@ class IngestHelperGUI:
                     file_path=local_path,
                 )
                 return True, None
+            else:
+                self.log(f"  通过服务器代理上传...")
         except ImportError:
-            pass
+            self.log(f"  通过服务器代理上传...")
         except Exception as e:
-            self.log(f"  TOS SDK 直传失败: {e}")
+            self.log(f"  TOS 直传失败，切换服务器代理: {e}")
+            self.log(f"  通过服务器代理上传...")
 
-        # --- 方式 2: 服务器预签名 URL ---
+        # --- 兜底: 服务器代理上传 ---
         if HAS_URLLIB:
             try:
                 presign_url = f"{SERVER_URL}/api/ui/upload/presign"
+                with open(local_path, 'rb') as f:
+                    file_data = base64.b64encode(f.read()).decode('ascii')
+
+                payload = json.dumps({
+                    "tos_key": tos_key,
+                    "file_base64": file_data,
+                }).encode("utf-8")
+
                 presign_req = urllib.request.Request(
                     presign_url,
-                    data=json.dumps({"tos_key": tos_key}).encode("utf-8"),
+                    data=payload,
                     headers={"Content-Type": "application/json"},
                     method="POST"
                 )
-                with urllib.request.urlopen(presign_req, timeout=30) as resp:
-                    presign_data = json.loads(resp.read().decode("utf-8"))
-                presigned = presign_data.get("url")
-                if presigned:
-                    with open(local_path, 'rb') as f:
-                        file_data = f.read()
-                    put_req = urllib.request.Request(
-                        presigned, data=file_data,
-                        method="PUT",
-                        headers={"Content-Type": "application/octet-stream"}
-                    )
-                    with urllib.request.urlopen(put_req, timeout=300) as resp:
-                        if resp.status == 200:
-                            return True, None
+                with urllib.request.urlopen(presign_req, timeout=300) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+
+                if result.get("success"):
+                    return True, None
+                else:
+                    return False, result.get("error", "unknown")
             except Exception as e:
                 self.log(f"  服务器代理上传失败: {e}")
 
-        return False, "TOS 上传失败：SDK 和服务器代理均不可用"
+        return False, "TOS 上传失败"
 
 
 def main():

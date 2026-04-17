@@ -1,4 +1,4 @@
-name: Build V15 GUI EXE v2.0
+name: Build V15 GUI EXE v3.0 (onedir)
 
 on:
   workflow_dispatch:
@@ -26,26 +26,27 @@ jobs:
         Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
         Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_extracted
         $d = Get-ChildItem ffmpeg_extracted -Directory | Select-Object -First 1
-        New-Item -ItemType Directory -Force -Path Windows_Release\bin
-        Copy-Item "$($d.FullName)\bin\ffmpeg.exe" Windows_Release\bin\
-        Copy-Item "$($d.FullName)\bin\ffprobe.exe" Windows_Release\bin\
+        New-Item -ItemType Directory -Force -Path build_release\bin
+        Copy-Item "$($d.FullName)\bin\ffmpeg.exe" build_release\bin\
+        Copy-Item "$($d.FullName)\bin\ffprobe.exe" build_release\bin\
         Remove-Item ffmpeg.zip, ffmpeg_extracted -Recurse -Force
     
-    - name: Build GUI EXE
+    - name: Build GUI EXE (onedir)
       run: |
-        pyinstaller --onefile --windowed --name ingest_helper_v15_gui main_gui.py
-        Copy-Item dist\ingest_helper_v15_gui.exe Windows_Release\
+        pyinstaller --onedir --windowed --name "Windows素材上传助手_v3.0" main_gui.py
+        Copy-Item dist\Windows素材上传助手_v3.0\* build_release\ -Recurse -Force
     
     - name: Create release package
       run: |
-        Copy-Item config.json.example Windows_Release\
-        Compress-Archive -Path Windows_Release\* -DestinationPath ingest_helper_v15_gui_0.2.0.zip -Force
-        Get-Item ingest_helper_v15_gui_0.2.0.zip | Select-Object Name, Length
+        Copy-Item config.json.example build_release\
+        Compress-Archive -Path build_release\* -DestinationPath ingest_helper_v15_gui_v3.0_onedir.zip -Force
+        $size = (Get-Item ingest_helper_v15_gui_v3.0_onedir.zip).Length
+        Write-Host "Package size: $size bytes ($([math]::Round($size/1MB, 1)) MB)"
     
     - uses: actions/upload-artifact@v4
       with:
-        name: v15-gui-release
-        path: ingest_helper_v15_gui_0.2.0.zip
+        name: v15-gui-v3.0-onedir
+        path: ingest_helper_v15_gui_v3.0_onedir.zip
         retention-days: 30
     
     - name: Upload to TOS
@@ -67,8 +68,8 @@ jobs:
         
         client = TosClientV2(ak=TOS_AK, sk=TOS_SK, endpoint=TOS_ENDPOINT, region=TOS_REGION)
         
-        zip_path = 'ingest_helper_v15_gui_0.2.0.zip'
-        tos_key = 'Windows_Executable/ingest_helper_v15_gui_0.2.0.zip'
+        zip_path = 'ingest_helper_v15_gui_v3.0_onedir.zip'
+        tos_key = 'Windows_Executable/ingest_helper_v15_gui_v3.0_onedir.zip'
         
         print(f'Uploading {zip_path} to {tos_key}...')
         client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)

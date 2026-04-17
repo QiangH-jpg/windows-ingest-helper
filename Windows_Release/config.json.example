@@ -1,0 +1,8 @@
+{
+  "server_url": "http://47.93.194.154:8088",
+  "tos_bucket": "e23-video",
+  "tos_region": "cn-beijing",
+  "tos_endpoint": "tos-cn-beijing.volces.com",
+  "tos_ingest_ak": "<YOUR_TOS_INGEST_AK>",
+  "tos_ingest_sk": "<YOUR_TOS_INGEST_SK>"
+}
