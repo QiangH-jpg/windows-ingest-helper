@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Windows 上传/预处理助手 v3.0 — onedir 正式版
+Windows 上传/预处理助手 v3.1 — 任务语境版
+
+v3.1 核心变更：
+- 新增"任务语境（粗筛用）"输入区：活动主题/目标/重点主体/优先镜头/回避镜头
+- 任务语境随 task/init 提交保存，第二层 Pro 读取用于候选池分层
 
 v3.0 核心变更：
 - 放弃 onefile 分发，改用 onedir（主EXE + bin/ffmpeg.exe + bin/ffprobe.exe）
@@ -70,7 +74,7 @@ def format_size_mb(size_bytes):
 class IngestHelperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Windows 上传/预处理助手 v3.0")
+        self.root.title("Windows 上传/预处理助手 v3.1")
         self.root.geometry("900x700")
 
         # 状态变量
@@ -144,6 +148,32 @@ class IngestHelperGUI:
         ttk.Label(top_frame, text="输出目录:").grid(row=1, column=0, sticky="w", pady=5)
         ttk.Entry(top_frame, textvariable=self.output_dir, width=60).grid(row=1, column=1, padx=5)
         ttk.Button(top_frame, text="浏览...", command=self.browse_output).grid(row=1, column=2)
+
+        # 任务语境区
+        ctx_frame = ttk.LabelFrame(self.root, text="1.5 任务语境（粗筛用）", padding=10)
+        ctx_frame.pack(fill="x", padx=10, pady=5)
+
+        self.ctx_theme = tk.StringVar()
+        self.ctx_target = tk.StringVar(value="1分钟以内新闻短视频")
+        self.ctx_subjects = tk.StringVar()
+        self.ctx_preferred = tk.StringVar()
+        self.ctx_avoid = tk.StringVar(value="纯空镜, 重复角度")
+
+        ttk.Label(ctx_frame, text="活动主题:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(ctx_frame, textvariable=self.ctx_theme, width=70).grid(row=0, column=1, padx=5, columnspan=3, sticky="ew")
+
+        ttk.Label(ctx_frame, text="目标输出:").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Entry(ctx_frame, textvariable=self.ctx_target, width=30).grid(row=1, column=1, padx=5, sticky="w")
+        ttk.Label(ctx_frame, text="重点主体:").grid(row=1, column=2, sticky="w")
+        ttk.Entry(ctx_frame, textvariable=self.ctx_subjects, width=30).grid(row=1, column=3, padx=5, sticky="w")
+
+        ttk.Label(ctx_frame, text="优先镜头:").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Entry(ctx_frame, textvariable=self.ctx_preferred, width=30).grid(row=2, column=1, padx=5, sticky="w")
+        ttk.Label(ctx_frame, text="回避镜头:").grid(row=2, column=2, sticky="w")
+        ttk.Entry(ctx_frame, textvariable=self.ctx_avoid, width=30).grid(row=2, column=3, padx=5, sticky="w")
+
+        ctx_frame.columnconfigure(1, weight=1)
+        ctx_frame.columnconfigure(3, weight=1)
 
         # 中部：视频列表
         list_frame = ttk.LabelFrame(self.root, text="2. 视频列表", padding=10)
@@ -764,9 +794,32 @@ class IngestHelperGUI:
 
         url = f"{SERVER_URL}/api/ui/task/init"
         filenames = [f.get('original_filename', 'unknown') for f in processed_files]
+        
+        # 构造任务语境
+        task_context = {}
+        try:
+            theme = self.ctx_theme.get().strip()
+            if theme:
+                task_context['activity_theme'] = theme
+            target = self.ctx_target.get().strip()
+            if target:
+                task_context['target_output'] = target
+            subjects = self.ctx_subjects.get().strip()
+            if subjects:
+                task_context['key_subjects'] = [s.strip() for s in subjects.split(',') if s.strip()]
+            preferred = self.ctx_preferred.get().strip()
+            if preferred:
+                task_context['preferred_shots'] = [s.strip() for s in preferred.split(',') if s.strip()]
+            avoid = self.ctx_avoid.get().strip()
+            if avoid:
+                task_context['avoid_shots'] = [s.strip() for s in avoid.split(',') if s.strip()]
+        except Exception:
+            pass
+        
         payload = json.dumps({
             "file_count": len(processed_files),
             "filenames": filenames,
+            "task_context": task_context,
         }).encode("utf-8")
 
         req = urllib.request.Request(
