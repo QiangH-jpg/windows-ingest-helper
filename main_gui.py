@@ -253,11 +253,12 @@ class IngestHelperGUI:
             try:
                 test_result = subprocess.run(
                     [self._ffprobe_path, '-version'],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True, timeout=10,
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 )
                 if test_result.returncode == 0:
-                    version_line = test_result.stdout.split('\n')[0] if test_result.stdout else '?'
+                    out = test_result.stdout.decode('utf-8', errors='replace') if test_result.stdout else '?'
+                    version_line = out.split('\n')[0]
                     self.log(f"ffprobe 自检: ✅ {version_line}")
                 else:
                     self.log(f"ffprobe 自检: ❌ 返回码 {test_result.returncode}")
@@ -449,19 +450,57 @@ class IngestHelperGUI:
             video_path
         ]
 
+        # 规范化路径（统一用 os.sep，解决混合 / 和 \ 的问题）
+        video_path = os.path.normpath(video_path)
+        cmd[-1] = video_path
+
         try:
+            # 关键修复：用 bytes 模式 + UTF-8 解码，避免 Windows GBK 编码导致中文路径 ffprobe 无输出
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30,
+                cmd, capture_output=True, timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
+            # 手动解码：优先 UTF-8，fallback GBK
+            stdout_text = ''
+            stderr_text = ''
+            if result.stdout:
+                try:
+                    stdout_text = result.stdout.decode('utf-8')
+                except UnicodeDecodeError:
+                    try:
+                        stdout_text = result.stdout.decode('gbk')
+                    except UnicodeDecodeError:
+                        stdout_text = result.stdout.decode('utf-8', errors='replace')
+            if result.stderr:
+                try:
+                    stderr_text = result.stderr.decode('utf-8', errors='replace')
+                except:
+                    stderr_text = str(result.stderr[:200])
+
             if result.returncode != 0:
-                err = result.stderr.strip()[:200] if result.stderr else '无错误信息'
+                err = stderr_text.strip()[:200] if stderr_text else '无错误信息'
                 self.log(f"  ❌ {filename}: ffprobe 返回码 {result.returncode}: {err}")
                 return None
-            if not result.stdout or result.stdout.strip() == '':
-                self.log(f"  ❌ {filename}: ffprobe 无输出")
-                return None
-            data = json.loads(result.stdout)
+            if not stdout_text or stdout_text.strip() == '':
+                # 二次尝试：用短路径（8.3 格式）规避中文路径问题
+                short_path = self._get_short_path(video_path)
+                if short_path and short_path != video_path:
+                    self.log(f"  ⚠️ {filename}: 中文路径无输出，尝试短路径...")
+                    cmd[-1] = short_path
+                    result2 = subprocess.run(
+                        cmd, capture_output=True, timeout=30,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
+                    if result2.stdout:
+                        try:
+                            stdout_text = result2.stdout.decode('utf-8')
+                        except:
+                            stdout_text = result2.stdout.decode('gbk', errors='replace')
+                if not stdout_text or stdout_text.strip() == '':
+                    self.log(f"  ❌ {filename}: ffprobe 无输出（可能是中文路径编码问题）")
+                    self.log(f"     建议：将素材移到纯英文路径下再试")
+                    return None
+            data = json.loads(stdout_text)
             streams = data.get('streams', [])
             if not streams:
                 self.log(f"  ❌ {filename}: ffprobe 未检测到视频流")
@@ -498,6 +537,18 @@ class IngestHelperGUI:
         except Exception as e:
             self.log(f"  ❌ {filename}: 未知错误: {type(e).__name__}: {e}")
             return None
+
+    def _get_short_path(self, long_path):
+        """Windows 8.3 短路径，规避中文路径问题"""
+        if os.name != 'nt':
+            return long_path
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(512)
+            ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 512)
+            return buf.value if buf.value else long_path
+        except:
+            return long_path
 
     # ============================================================
     # 转码
