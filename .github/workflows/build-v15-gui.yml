@@ -1,4 +1,4 @@
-name: Build V15 GUI EXE v3.1 (任务语境版)
+name: Build V15 GUI EXE v3.2
 
 on:
   workflow_dispatch:
@@ -33,20 +33,20 @@ jobs:
     
     - name: Build GUI EXE (onedir)
       run: |
-        pyinstaller --onedir --windowed --name "Windows素材上传助手_v3.1" main_gui.py
-        Copy-Item dist\Windows素材上传助手_v3.1\* build_release\ -Recurse -Force
+        pyinstaller --onedir --windowed --name "Windows素材上传助手_v3.2" main_gui.py
+        Copy-Item dist\Windows素材上传助手_v3.2\* build_release\ -Recurse -Force
     
     - name: Create release package
       run: |
         Copy-Item config.json.example build_release\
-        Compress-Archive -Path build_release\* -DestinationPath ingest_helper_v15_gui_v3.1_onedir.zip -Force
-        $size = (Get-Item ingest_helper_v15_gui_v3.1_onedir.zip).Length
+        Compress-Archive -Path build_release\* -DestinationPath ingest_helper_v15_gui_v3.2_onedir.zip -Force
+        $size = (Get-Item ingest_helper_v15_gui_v3.2_onedir.zip).Length
         Write-Host "Package size: $size bytes ($([math]::Round($size/1MB, 1)) MB)"
     
     - uses: actions/upload-artifact@v4
       with:
-        name: v15-gui-v3.1-onedir
-        path: ingest_helper_v15_gui_v3.1_onedir.zip
+        name: v15-gui-v3.2-onedir
+        path: ingest_helper_v15_gui_v3.2_onedir.zip
         retention-days: 30
     
     - name: Upload to TOS
@@ -68,8 +68,8 @@ jobs:
         
         client = TosClientV2(ak=TOS_AK, sk=TOS_SK, endpoint=TOS_ENDPOINT, region=TOS_REGION)
         
-        zip_path = 'ingest_helper_v15_gui_v3.1_onedir.zip'
-        tos_key = 'release/ingest_helper_v15_gui_v3.1_onedir.zip'
+        zip_path = 'ingest_helper_v15_gui_v3.2_onedir.zip'
+        tos_key = 'release/ingest_helper_v15_gui_v3.2_onedir.zip'
         
         print(f'Uploading {zip_path} to {tos_key}...')
         client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)
