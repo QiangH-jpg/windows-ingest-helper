@@ -614,6 +614,7 @@ class IngestHelperGUI:
                     continue
 
                 if info['duration'] <= SHORT_DURATION_THRESHOLD:
+                    self.log(f"  ⏭️ {filename}: 时长过短 ({format_duration(info['duration'])})，跳过转码")
                     self.bad_count += 1
                     self.update_item_status(i, f"⏭️ 跳过：{format_duration(info['duration'])}")
                     continue
@@ -748,9 +749,19 @@ class IngestHelperGUI:
                 tos_key = f"{tos_prefix}{original_filename}"
 
                 self.progress_var.set(int((i + 1) / total * 100))
-                self.log(f"[{i+1}/{total}] {original_filename}")
-
-                ok, err = self._upload_one(proxy_path, tos_key)
+                
+                # 上传重试机制（最多 3 次）
+                ok, err = False, None
+                for attempt in range(1, 4):
+                    self.log(f"[{i+1}/{total}] {original_filename} (尝试 {attempt}/3)...")
+                    ok, err = self._upload_one(proxy_path, tos_key)
+                    if ok:
+                        break
+                    self.log(f"  ⚠️ 上传失败: {err}，{'重试' if attempt < 3 else '放弃'}")
+                    if attempt < 3:
+                        import time
+                        time.sleep(2 ** attempt)  # 指数退避：2s, 4s
+                
                 if ok:
                     item['tos_key'] = tos_key
                     item['upload_status'] = 'uploaded'
@@ -758,7 +769,7 @@ class IngestHelperGUI:
                     self.uploaded_count += 1
                     self.update_item_status(item.get('index', i), "✅ 已上传")
                 else:
-                    self.update_item_status(item.get('index', i), "❌ 上传失败")
+                    self.update_item_status(item.get('index', i), f"❌ 上传失败：{err}")
 
             with open(self.manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
