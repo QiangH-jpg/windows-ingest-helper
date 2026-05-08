@@ -10,7 +10,6 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "title": "元泉智影上传助手",
     "windows": [
       {
         "title": "元泉智影上传助手",
@@ -49,7 +48,9 @@
       "all": true
     },
     "fs": {
-      "scope": ["**"]
+      "scope": [
+        "**"
+      ]
     },
     "shell": {
       "open": true
