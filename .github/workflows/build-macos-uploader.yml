@@ -1,0 +1,82 @@
+name: Build macOS Uploader
+
+on:
+  push:
+    tags: ['macos-*', 'v*']
+    paths:
+      - 'macos-uploader/**'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: macos-uploader
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install Rust stable
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: macos-uploader/src-tauri
+
+    - name: Install frontend dependencies
+      run: npm install
+
+    - name: Build frontend
+      run: npm run build
+
+    - name: Download FFmpeg for macOS (Apple Silicon)
+      run: |
+        mkdir -p src-tauri/bin
+        brew install ffmpeg
+        cp $(which ffmpeg) src-tauri/bin/ffmpeg-aarch64-apple-darwin
+        cp $(which ffprobe) src-tauri/bin/ffprobe-aarch64-apple-darwin
+        chmod +x src-tauri/bin/*
+        echo "FFmpeg:"
+        src-tauri/bin/ffmpeg-aarch64-apple-darwin -version | head -1
+        echo "FFprobe:"
+        src-tauri/bin/ffprobe-aarch64-apple-darwin -version | head -1
+
+    - name: Install Tauri CLI
+      run: cargo install tauri-cli --version "^2"
+
+    - name: Build Tauri App (unsigned, Apple Silicon)
+      run: cargo tauri build --target aarch64-apple-darwin
+      env:
+        TAURI_SIGNING_PRIVATE_KEY: ""
+
+    - name: List build artifacts
+      run: |
+        echo "=== DMG ==="
+        find src-tauri/target -name "*.dmg" -type f 2>/dev/null || echo "No DMG"
+        echo "=== APP ==="
+        find src-tauri/target -name "*.app" -type d 2>/dev/null || echo "No APP"
+        echo "=== Size ==="
+        ls -lh src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null || true
+        ls -lh src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app 2>/dev/null || true
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: openclaw-uploader-macos-arm64
+        path: |
+          macos-uploader/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          macos-uploader/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+        retention-days: 30
+        if-no-files-found: warn

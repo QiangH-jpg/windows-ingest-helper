@@ -1,0 +1,17 @@
+{
+  "name": "openclaw-uploader",
+  "version": "0.1.0",
+  "description": "元泉智影上传助手 — macOS 素材转码/上传客户端",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "vite": "^6.0.0"
+  }
+}
