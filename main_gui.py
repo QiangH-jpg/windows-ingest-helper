@@ -95,22 +95,44 @@ class IngestHelperGUI:
         else:
             app_dir = os.path.dirname(os.path.abspath(__file__))
 
-        bin_dir = os.path.join(app_dir, "bin")
-        self._bin_dir = bin_dir
         self._app_dir = app_dir
 
-        ffmpeg_path = os.path.join(bin_dir, "ffmpeg.exe")
-        ffprobe_path = os.path.join(bin_dir, "ffprobe.exe")
+        # 搜索顺序：bin/ → _internal/bin/ → 上级/bin/ → 同级目录
+        search_dirs = [
+            os.path.join(app_dir, "bin"),
+            os.path.join(app_dir, "_internal", "bin"),
+            os.path.join(os.path.dirname(app_dir), "bin"),
+            app_dir,
+        ]
 
-        if os.path.exists(ffmpeg_path):
-            FFMPEG = ffmpeg_path
-        if os.path.exists(ffprobe_path):
-            FFPROBE = ffprobe_path
+        ffmpeg_found = None
+        ffprobe_found = None
+        bin_dir_found = None
+
+        for sd in search_dirs:
+            if not os.path.isdir(sd):
+                continue
+            ff = os.path.join(sd, "ffmpeg.exe")
+            fp = os.path.join(sd, "ffprobe.exe")
+            if os.path.exists(fp) and not ffprobe_found:
+                ffprobe_found = fp
+                bin_dir_found = sd
+            if os.path.exists(ff) and not ffmpeg_found:
+                ffmpeg_found = ff
+                if not bin_dir_found:
+                    bin_dir_found = sd
+
+        self._bin_dir = bin_dir_found or os.path.join(app_dir, "bin")
+
+        if ffmpeg_found:
+            FFMPEG = ffmpeg_found
+        if ffprobe_found:
+            FFPROBE = ffprobe_found
 
         self._ffmpeg_path = FFMPEG
         self._ffprobe_path = FFPROBE
-        self._ffmpeg_exists = os.path.exists(FFMPEG) if FFMPEG else False
-        self._ffprobe_exists = os.path.exists(FFPROBE) if FFPROBE else False
+        self._ffmpeg_exists = os.path.exists(FFMPEG) if FFMPEG != "ffmpeg" else False
+        self._ffprobe_exists = os.path.exists(FFPROBE) if FFPROBE != "ffprobe" else False
 
     # ============================================================
     # UI 设置
@@ -204,10 +226,72 @@ class IngestHelperGUI:
         self.log("=" * 50)
         self.log(f"程序目录: {self._app_dir}")
         self.log(f"bin 目录: {self._bin_dir}")
+        self.log(f"bin 目录存在: {'✅' if os.path.isdir(self._bin_dir) else '❌ 不存在!'}")
+        
+        # 列出 bin 目录内容
+        if os.path.isdir(self._bin_dir):
+            bin_files = os.listdir(self._bin_dir)
+            self.log(f"bin 目录内容: {bin_files}")
+        else:
+            self.log("⚠️ bin 目录不存在！请确认解压后 bin/ 文件夹在 EXE 同级目录")
+            # 尝试在上级、_internal 等位置查找
+            for alt in [
+                os.path.join(self._app_dir, '_internal', 'bin'),
+                os.path.join(os.path.dirname(self._app_dir), 'bin'),
+                self._app_dir,
+            ]:
+                if os.path.isdir(alt):
+                    alt_files = [f for f in os.listdir(alt) if 'ff' in f.lower()]
+                    if alt_files:
+                        self.log(f"  → 在 {alt} 找到: {alt_files}")
+        
         self.log(f"ffmpeg: {'✅' if self._ffmpeg_exists else '❌'} {self._ffmpeg_path}")
         self.log(f"ffprobe: {'✅' if self._ffprobe_exists else '❌'} {self._ffprobe_path}")
+        
+        # ffprobe 可执行性测试
+        if self._ffprobe_exists:
+            try:
+                test_result = subprocess.run(
+                    [self._ffprobe_path, '-version'],
+                    capture_output=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                if test_result.returncode == 0:
+                    out = test_result.stdout.decode('utf-8', errors='replace') if test_result.stdout else '?'
+                    version_line = out.split('\n')[0]
+                    self.log(f"ffprobe 自检: ✅ {version_line}")
+                else:
+                    self.log(f"ffprobe 自检: ❌ 返回码 {test_result.returncode}")
+                    if test_result.stderr:
+                        self.log(f"  stderr: {test_result.stderr[:200]}")
+            except Exception as e:
+                self.log(f"ffprobe 自检: ❌ 执行异常: {e}")
+        else:
+            self.log("⚠️ ffprobe 不可用，将无法读取视频元数据！")
+            self.log("  解决方法: 确认 bin/ffprobe.exe 在程序同级目录")
+        
+        # 临时目录可写性测试
+        import tempfile
+        try:
+            tmp = tempfile.gettempdir()
+            test_file = os.path.join(tmp, '_v15_write_test.tmp')
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+            self.log(f"临时目录: ✅ {tmp}")
+        except Exception as e:
+            self.log(f"临时目录: ❌ 不可写 {e}")
+        
         if not self._ffmpeg_exists or not self._ffprobe_exists:
-            self.log("⚠️ 分发包缺失 ffmpeg/ffprobe，请将 bin/ 放在程序同级目录")
+            self.log("")
+            self.log("⚠️ 素材读取功能不可用！")
+            self.log("  请确认解压后目录结构如下:")
+            self.log("  Windows素材上传助手_v3.2/")
+            self.log("    ├── Windows素材上传助手_v3.2.exe")
+            self.log("    ├── bin/")
+            self.log("    │   ├── ffmpeg.exe")
+            self.log("    │   └── ffprobe.exe")
+            self.log("    └── _internal/")
         self.log("-" * 50)
 
     # ============================================================
@@ -248,10 +332,28 @@ class IngestHelperGUI:
         self.video_files = []
         self.scan_count = 0
 
-        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.m4v'}
+        # 目录可读性自检
+        self.log(f"扫描目录: {input_dir}")
+        if any(ord(c) > 127 for c in input_dir):
+            self.log(f"  ⚠️ 目录路径含中文/特殊字符")
+        if ' ' in input_dir:
+            self.log(f"  ⚠️ 目录路径含空格")
+        try:
+            all_files = os.listdir(input_dir)
+            self.log(f"  目录可读: ✅ ({len(all_files)} 个文件/文件夹)")
+        except PermissionError:
+            self.log(f"  目录可读: ❌ 权限不足")
+            messagebox.showerror("错误", f"无法读取目录：权限不足\n{input_dir}")
+            return
+        except Exception as e:
+            self.log(f"  目录可读: ❌ {e}")
+            messagebox.showerror("错误", f"无法读取目录：{e}\n{input_dir}")
+            return
+
+        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.m4v', '.MP4', '.MOV', '.AVI', '.MKV', '.M4V'}
         for root, dirs, files in os.walk(input_dir):
             for file in files:
-                if Path(file).suffix.lower() in video_extensions:
+                if Path(file).suffix.lower() in {'.mp4', '.mov', '.avi', '.mkv', '.m4v'}:
                     self.video_files.append(os.path.join(root, file))
 
         total = len(self.video_files)
@@ -318,17 +420,27 @@ class IngestHelperGUI:
     def get_video_info(self, video_path):
         global FFPROBE
         ffprobe_path = FFPROBE
+        filename = os.path.basename(video_path)
 
         if not ffprobe_path or ffprobe_path == "ffprobe":
+            self.log(f"  ❌ {filename}: ffprobe 未配置（bin/ffprobe.exe 缺失）")
             return None
         if not os.path.exists(ffprobe_path):
+            self.log(f"  ❌ {filename}: ffprobe 文件不存在: {ffprobe_path}")
             return None
         if not os.path.exists(video_path):
+            self.log(f"  ❌ {filename}: 视频文件不存在: {video_path}")
             return None
 
         if not getattr(self, '_probe_first_logged', False):
             self._probe_first_logged = True
             self.log(f"  [诊断] ffprobe={ffprobe_path}")
+            self.log(f"  [诊断] 素材路径={video_path}")
+            # 检查路径是否含特殊字符
+            if any(ord(c) > 127 for c in video_path):
+                self.log(f"  [诊断] ⚠️ 路径含非 ASCII 字符（中文/特殊字符）")
+            if ' ' in video_path:
+                self.log(f"  [诊断] ⚠️ 路径含空格")
 
         cmd = [
             ffprobe_path, '-v', 'error',
@@ -338,26 +450,105 @@ class IngestHelperGUI:
             video_path
         ]
 
+        # 规范化路径（统一用 os.sep，解决混合 / 和 \ 的问题）
+        video_path = os.path.normpath(video_path)
+        cmd[-1] = video_path
+
         try:
+            # 关键修复：用 bytes 模式 + UTF-8 解码，避免 Windows GBK 编码导致中文路径 ffprobe 无输出
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30,
+                cmd, capture_output=True, timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
-            if not result.stdout or result.stdout.strip() == '':
+            # 手动解码：优先 UTF-8，fallback GBK
+            stdout_text = ''
+            stderr_text = ''
+            if result.stdout:
+                try:
+                    stdout_text = result.stdout.decode('utf-8')
+                except UnicodeDecodeError:
+                    try:
+                        stdout_text = result.stdout.decode('gbk')
+                    except UnicodeDecodeError:
+                        stdout_text = result.stdout.decode('utf-8', errors='replace')
+            if result.stderr:
+                try:
+                    stderr_text = result.stderr.decode('utf-8', errors='replace')
+                except:
+                    stderr_text = str(result.stderr[:200])
+
+            if result.returncode != 0:
+                err = stderr_text.strip()[:200] if stderr_text else '无错误信息'
+                self.log(f"  ❌ {filename}: ffprobe 返回码 {result.returncode}: {err}")
                 return None
-            data = json.loads(result.stdout)
-            stream = data.get('streams', [{}])[0]
+            if not stdout_text or stdout_text.strip() == '':
+                # 二次尝试：用短路径（8.3 格式）规避中文路径问题
+                short_path = self._get_short_path(video_path)
+                if short_path and short_path != video_path:
+                    self.log(f"  ⚠️ {filename}: 中文路径无输出，尝试短路径...")
+                    cmd[-1] = short_path
+                    result2 = subprocess.run(
+                        cmd, capture_output=True, timeout=30,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
+                    if result2.stdout:
+                        try:
+                            stdout_text = result2.stdout.decode('utf-8')
+                        except:
+                            stdout_text = result2.stdout.decode('gbk', errors='replace')
+                if not stdout_text or stdout_text.strip() == '':
+                    self.log(f"  ❌ {filename}: ffprobe 无输出（可能是中文路径编码问题）")
+                    self.log(f"     建议：将素材移到纯英文路径下再试")
+                    return None
+            data = json.loads(stdout_text)
+            streams = data.get('streams', [])
+            if not streams:
+                self.log(f"  ❌ {filename}: ffprobe 未检测到视频流")
+                return None
+            stream = streams[0]
             fmt = data.get('format', {})
+            duration = float(stream.get('duration', 0))
+            if duration == 0:
+                # 尝试从 format 读取 duration
+                duration = float(fmt.get('duration', 0))
             return {
                 'width': stream.get('width', 0),
                 'height': stream.get('height', 0),
-                'duration': float(stream.get('duration', 0)),
+                'duration': duration,
                 'fps': stream.get('r_frame_rate', '0/1'),
                 'codec': stream.get('codec_name', 'unknown'),
                 'size': int(fmt.get('size', 0)),
             }
-        except:
+        except subprocess.TimeoutExpired:
+            self.log(f"  ❌ {filename}: ffprobe 超时（30s）")
             return None
+        except json.JSONDecodeError as e:
+            self.log(f"  ❌ {filename}: ffprobe 输出 JSON 解析失败: {e}")
+            return None
+        except FileNotFoundError:
+            self.log(f"  ❌ {filename}: ffprobe 可执行文件未找到（可能被杀毒软件拦截）")
+            return None
+        except PermissionError:
+            self.log(f"  ❌ {filename}: ffprobe 权限不足（可能被杀毒软件阻止）")
+            return None
+        except OSError as e:
+            self.log(f"  ❌ {filename}: 系统错误: {e}")
+            return None
+        except Exception as e:
+            self.log(f"  ❌ {filename}: 未知错误: {type(e).__name__}: {e}")
+            return None
+
+    def _get_short_path(self, long_path):
+        """Windows 8.3 短路径，规避中文路径问题"""
+        if os.name != 'nt':
+            return long_path
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(512)
+            ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 512)
+            return buf.value if buf.value else long_path
+        except:
+            return long_path
 
     # ============================================================
     # 转码
@@ -423,6 +614,7 @@ class IngestHelperGUI:
                     continue
 
                 if info['duration'] <= SHORT_DURATION_THRESHOLD:
+                    self.log(f"  ⏭️ {filename}: 时长过短 ({format_duration(info['duration'])})，跳过转码")
                     self.bad_count += 1
                     self.update_item_status(i, f"⏭️ 跳过：{format_duration(info['duration'])}")
                     continue
@@ -557,9 +749,19 @@ class IngestHelperGUI:
                 tos_key = f"{tos_prefix}{original_filename}"
 
                 self.progress_var.set(int((i + 1) / total * 100))
-                self.log(f"[{i+1}/{total}] {original_filename}")
-
-                ok, err = self._upload_one(proxy_path, tos_key)
+                
+                # 上传重试机制（最多 3 次）
+                ok, err = False, None
+                for attempt in range(1, 4):
+                    self.log(f"[{i+1}/{total}] {original_filename} (尝试 {attempt}/3)...")
+                    ok, err = self._upload_one(proxy_path, tos_key)
+                    if ok:
+                        break
+                    self.log(f"  ⚠️ 上传失败: {err}，{'重试' if attempt < 3 else '放弃'}")
+                    if attempt < 3:
+                        import time
+                        time.sleep(2 ** attempt)  # 指数退避：2s, 4s
+                
                 if ok:
                     item['tos_key'] = tos_key
                     item['upload_status'] = 'uploaded'
@@ -567,7 +769,7 @@ class IngestHelperGUI:
                     self.uploaded_count += 1
                     self.update_item_status(item.get('index', i), "✅ 已上传")
                 else:
-                    self.update_item_status(item.get('index', i), "❌ 上传失败")
+                    self.update_item_status(item.get('index', i), f"❌ 上传失败：{err}")
 
             with open(self.manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
