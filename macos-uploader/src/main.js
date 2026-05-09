@@ -33,7 +33,7 @@ const S={
 };
 
 function log(msg){S.logs.push(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] ${msg}`);renderLog()}
-function renderLog(){const el=document.getElementById('log-area');if(el){el.innerHTML=S.logs.map(l=>`<div>${e(l)}</div>`).join('');el.scrollTop=el.scrollHeight}}
+function renderLog(){const el=document.getElementById('log-area');if(el){el.innerHTML=S.logs.map(l=>`<div>${e(l)}</div>`).join('');setTimeout(()=>{el.scrollTop=el.scrollHeight},0)}}
 
 function render(){
   document.getElementById("app").innerHTML=`
@@ -275,6 +275,6 @@ function bind(){
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
 }
 
-function init(){const c=lc();S.serverUrl=c.serverUrl||'http://47.93.194.154:8088';S.newsEvent=c.newsEvent||'';S.videoTheme='';S.inputDir=c.inputDir||'';S.outputDir=c.outputDir||PROXY_DIR;render()}
+function init(){const c=lc();S.serverUrl=c.serverUrl||'http://47.93.194.154:8088';S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render()}
 window.doBrowseInput=doBrowseInput;window.doBrowseOutput=doBrowseOutput;window.doHealth=doHealth;window.doFfmpeg=doFfmpeg;window.doScan=doScan;window.doTranscode=doTranscode;window.doUpload=doUpload;window.doOpenUrl=doOpenUrl;window.toggleDiag=toggleDiag;
 init();
