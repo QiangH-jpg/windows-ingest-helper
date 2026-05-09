@@ -90,6 +90,7 @@ function render(){
   <div class="status-bar">${statusBarText()}</div>
   `;
   bind();
+  setTimeout(()=>{const el=document.getElementById('log-area');if(el)el.scrollTop=el.scrollHeight},10);
 }
 
 function canTranscode(){return S.inputDir&&!S.processing&&S.files.length>0}
@@ -126,7 +127,7 @@ function fileTableHtml(){
 }
 
 function statusText(f){
-  const m={pending:'等待',probing:'分析中…',probed:'已分析',skipped:'跳过',transcoding:'转码中…',transcoded:'转码完成',tc_failed:'转码失败',uploading:'上传中…',uploaded:'上传完成',failed:'失败'};
+  const m={pending:'待处理',probing:'分析中…',probed:'已分析',skipped:'跳过',transcoding:'转码中…',transcoded:'转码完成',tc_failed:'转码失败',uploading:'上传中…',uploaded:'上传完成',failed:'失败'};
   let t=m[f.status]||f.status;
   if(f.tcTime>0)t+=` ${f.tcTime.toFixed(1)}s`;
   if(f.proxySize>0)t+=` ${fmtSize(f.proxySize)}`;
@@ -155,10 +156,10 @@ function diagHtml(){
 // Actions
 // ============================================================
 async function doBrowseInput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'选择素材目录'});if(sel){S.inputDir=sel;sc({inputDir:sel});render()}}catch{}
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择素材文件夹（包含视频文件的目录）'});if(sel){S.inputDir=sel;sc({inputDir:sel});render()}}catch{}
 }
 async function doBrowseOutput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'选择输出目录'});if(sel){S.outputDir=sel;sc({outputDir:sel});render()}}catch{}
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择转码输出目录'});if(sel){S.outputDir=sel;sc({outputDir:sel});render()}}catch{}
 }
 
 async function doHealth(){
@@ -263,7 +264,7 @@ async function doUpload(){
 
   S.phase='done';S.processing=false;S.currentIdx=-1;
   log(`\n🎉 上传完成：${S.totalUploaded} 成功，${S.totalSkipped} 跳过，${S.totalFailed} 失败`);
-  if(S.taskUrl)log(`🌐 Web 工作台: ${S.taskUrl}`);
+  if(S.taskUrl){log(`🌐 正在打开 Web 工作台…`);setTimeout(()=>doOpenUrl(S.taskUrl),1500)}
   render();
 }
 
