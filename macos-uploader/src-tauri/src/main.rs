@@ -95,10 +95,12 @@ fn detect_ffmpeg() -> (FfmpegInfo, FfmpegInfo) {
             { true }
         };
         if !exists {
-            return FfmpegInfo { available: false, path: p, version: String::new(), error: format!("文件不存在: {}", p), exists, executable };
+            let err = format!("文件不存在: {}", &p);
+            return FfmpegInfo { available: false, path: p, version: String::new(), error: err, exists, executable };
         }
         if !executable {
-            return FfmpegInfo { available: false, path: p.clone(), version: String::new(), error: format!("无执行权限: {}", p), exists, executable };
+            let err = format!("无执行权限: {}", &p);
+            return FfmpegInfo { available: false, path: p, version: String::new(), error: err, exists, executable };
         }
         match Command::new(&p).arg("-version").output() {
             Ok(o) if o.status.success() => {
