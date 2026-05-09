@@ -44,13 +44,10 @@
     }
   },
   "plugins": {
-    "dialog": {
-      "all": true
-    },
     "fs": {
-      "scope": [
-        "**"
-      ]
+      "scope": {
+        "allow": ["**"]
+      }
     },
     "shell": {
       "open": true
