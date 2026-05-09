@@ -8,23 +8,14 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 fn resolve_ffmpeg(name: &str) -> String {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            // 1. 同目录 (Contents/MacOS/)
-            let s = dir.join(name);
-            if s.exists() { return s.to_string_lossy().to_string(); }
-            // 2. Resources/bin/
-            let b = dir.join("../Resources/bin").join(name);
-            if b.exists() { return b.canonicalize().unwrap_or(b).to_string_lossy().to_string(); }
-        }
-    }
-    // 3. 常见 Homebrew 路径
+    // 1. 优先搜索 Homebrew 路径（动态库完整，可正常运行）
     for p in ["/opt/homebrew/bin", "/usr/local/bin"] {
         let full = format!("{}/{}", p, name);
         if std::path::Path::new(&full).exists() { return full; }
     }
-    // 4. 系统 PATH fallback
+    // 2. 系统 PATH
     name.to_string()
+    // 3. 不再 fallback 到 App 内（打包的 ffmpeg 依赖 Homebrew Cellar dylib，无法运行）
 }
 
 // ============================================================
