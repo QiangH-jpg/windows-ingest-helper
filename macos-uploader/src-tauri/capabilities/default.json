@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegram/nicegram-web/main/nicegram-web/tauri-v2-capabilities-schema.json",
+  "identifier": "default",
+  "description": "默认权限：窗口管理 + 文件夹选择 + 文件读取 + 打开外部链接",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-read-dir",
+    "shell:allow-open"
+  ]
+}
