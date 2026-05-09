@@ -81,8 +81,6 @@ function render(){
     </div>
   </div>
 
-  ${taskResultHtml()}
-
   <div class="section">
     <div class="section-title">4. 处理日志 <button onclick="toggleDiag()" class="sm">${S.showDiag?'隐藏':'🔧 诊断'}</button></div>
     ${S.showDiag?diagHtml():''}
@@ -95,7 +93,7 @@ function render(){
 }
 
 function canTranscode(){return S.inputDir&&!S.processing&&S.files.length>0}
-function canUpload(){return S.taskId&&!S.processing&&S.totalUploaded>0}
+function canUpload(){return !S.processing&&S.files.some(f=>f.status==='transcoded')}
 function progressPct(){
   if(!S.files.length)return 0;
   if(S.phase==='done')return 100;
@@ -277,6 +275,6 @@ function bind(){
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
 }
 
-function init(){const c=lc();S.serverUrl=c.serverUrl||'http://47.93.194.154:8088';S.newsEvent=c.newsEvent||'';S.videoTheme=c.videoTheme||'';S.inputDir=c.inputDir||'';S.outputDir=c.outputDir||PROXY_DIR;render()}
+function init(){const c=lc();S.serverUrl=c.serverUrl||'http://47.93.194.154:8088';S.newsEvent=c.newsEvent||'';S.videoTheme='';S.inputDir=c.inputDir||'';S.outputDir=c.outputDir||PROXY_DIR;render()}
 window.doBrowseInput=doBrowseInput;window.doBrowseOutput=doBrowseOutput;window.doHealth=doHealth;window.doFfmpeg=doFfmpeg;window.doScan=doScan;window.doTranscode=doTranscode;window.doUpload=doUpload;window.doOpenUrl=doOpenUrl;window.toggleDiag=toggleDiag;
 init();
