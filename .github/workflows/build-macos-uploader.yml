@@ -41,6 +41,22 @@ jobs:
     - name: Build frontend
       run: npm run build
 
+    - name: Download static FFmpeg (arm64)
+      run: |
+        mkdir -p src-tauri/bin
+        echo "Downloading static ffmpeg for darwin-arm64..."
+        curl -sL "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz" | gunzip > src-tauri/bin/ffmpeg-aarch64-apple-darwin
+        curl -sL "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-darwin-arm64.gz" | gunzip > src-tauri/bin/ffprobe-aarch64-apple-darwin
+        chmod +x src-tauri/bin/*
+        echo "FFmpeg:"
+        src-tauri/bin/ffmpeg-aarch64-apple-darwin -version | head -1
+        echo "FFprobe:"
+        src-tauri/bin/ffprobe-aarch64-apple-darwin -version | head -1
+        echo "File type:"
+        file src-tauri/bin/ffmpeg-aarch64-apple-darwin
+        echo "Size:"
+        ls -lh src-tauri/bin/
+
     - name: Install Tauri CLI
       run: cargo install tauri-cli --version "^2"
 
@@ -55,9 +71,10 @@ jobs:
         find src-tauri/target -name "*.dmg" -type f 2>/dev/null || echo "No DMG"
         echo "=== APP ==="
         find src-tauri/target -name "*.app" -type d 2>/dev/null || echo "No APP"
-        echo "=== Size ==="
-        ls -lh src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null || true
-        ls -lh src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app 2>/dev/null || true
+        echo "=== Sidecar check ==="
+        find src-tauri/target -name "ffmpeg" -o -name "ffprobe" 2>/dev/null | head -10
+        echo "=== App Contents ==="
+        ls -la src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app/Contents/MacOS/ 2>/dev/null || true
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
