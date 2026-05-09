@@ -42,15 +42,5 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     }
-  },
-  "plugins": {
-    "fs": {
-      "scope": {
-        "allow": ["**"]
-      }
-    },
-    "shell": {
-      "open": true
-    }
   }
 }
