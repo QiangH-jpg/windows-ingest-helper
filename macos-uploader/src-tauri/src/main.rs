@@ -1,5 +1,5 @@
 // 元泉智影上传助手 — Tauri 主进程入口
-// Phase 3E: 实机可用性修复
+// Phase 3G: Windows 对齐 + 实时进度（前端 orchestrator）
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -8,27 +8,25 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 fn resolve_ffmpeg(name: &str) -> String {
-    // 1. App Bundle sidecar（优先：Contents/MacOS/ 同目录）
+    // 1. App Bundle sidecar（优先）
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let sidecar = dir.join(name);
             if sidecar.exists() { return sidecar.to_string_lossy().to_string(); }
-            // 也检查 Resources/bin/
             let res = dir.join("../Resources/bin").join(name);
             if res.exists() { return res.canonicalize().unwrap_or(res).to_string_lossy().to_string(); }
         }
     }
-    // 2. Homebrew fallback（开发环境 / 用户自行安装）
+    // 2. Homebrew fallback
     for p in ["/opt/homebrew/bin", "/usr/local/bin"] {
         let full = format!("{}/{}", p, name);
         if std::path::Path::new(&full).exists() { return full; }
     }
-    // 3. 系统 PATH（最后 fallback）
     name.to_string()
 }
 
 // ============================================================
-// 服务器连通性检查 (Rust 侧，绕过 WebView HTTP 限制)
+// Health（Rust 侧，绕过 WebView HTTP 限制）
 // ============================================================
 #[derive(Serialize)]
 struct HealthResult { ok: bool, status: u16, version: String, error: String, url: String }
@@ -41,9 +39,7 @@ fn check_health(server_url: String) -> HealthResult {
             let status = resp.status();
             let body = resp.into_string().unwrap_or_default();
             let version = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v["version"].as_str().map(String::from))
-                .unwrap_or_default();
+                .ok().and_then(|v| v["version"].as_str().map(String::from)).unwrap_or_default();
             HealthResult { ok: status == 200, status, version, error: String::new(), url }
         }
         Err(e) => HealthResult { ok: false, status: 0, version: String::new(), error: e.to_string(), url }
@@ -51,25 +47,16 @@ fn check_health(server_url: String) -> HealthResult {
 }
 
 // ============================================================
-// 诊断信息
+// 诊断
 // ============================================================
 #[derive(Serialize)]
-struct DiagInfo {
-    app_version: String,
-    exe_path: String,
-    ffmpeg_path: String,
-    ffprobe_path: String,
-    proxy_dir: String,
-}
+struct DiagInfo { app_version: String, exe_path: String, ffmpeg_path: String, ffprobe_path: String, proxy_dir: String }
 
 #[tauri::command]
 fn get_diag_info() -> DiagInfo {
-    let exe_path = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or("unknown".into());
     DiagInfo {
-        app_version: "0.1.0-alpha (Phase 3E)".into(),
-        exe_path,
+        app_version: "0.1.0-alpha (Phase 3G)".into(),
+        exe_path: std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or("unknown".into()),
         ffmpeg_path: resolve_ffmpeg("ffmpeg"),
         ffprobe_path: resolve_ffmpeg("ffprobe"),
         proxy_dir: "/tmp/openclaw_uploader_proxy".into(),
@@ -86,8 +73,7 @@ struct FfmpegInfo { available: bool, path: String, version: String, error: Strin
 fn detect_ffmpeg() -> (FfmpegInfo, FfmpegInfo) {
     let mk = |n: &str| {
         let p = resolve_ffmpeg(n);
-        let path_obj = std::path::Path::new(&p);
-        let exists = path_obj.exists();
+        let exists = std::path::Path::new(&p).exists();
         let executable = exists && {
             #[cfg(unix)]
             { use std::os::unix::fs::PermissionsExt; std::fs::metadata(&p).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false) }
@@ -108,8 +94,8 @@ fn detect_ffmpeg() -> (FfmpegInfo, FfmpegInfo) {
                 FfmpegInfo { available: true, path: p, version: ver, error: String::new(), exists, executable }
             }
             Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr).to_string();
-                FfmpegInfo { available: false, path: p, version: String::new(), error: format!("exit code {}: {}", o.status.code().unwrap_or(-1), stderr.chars().take(200).collect::<String>()), exists, executable }
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                FfmpegInfo { available: false, path: p, version: String::new(), error: format!("exit {}: {}", o.status.code().unwrap_or(-1), stderr.chars().take(200).collect::<String>()), exists, executable }
             }
             Err(e) => FfmpegInfo { available: false, path: p, version: String::new(), error: e.to_string(), exists, executable }
         }
@@ -130,8 +116,7 @@ struct ScanResult { files: Vec<ScannedFile>, total: usize, skipped_hidden: usize
 fn scan_folder(folder: String) -> ScanResult {
     let exts = ["mp4","mov","m4v","mkv","avi"];
     let mut files = Vec::new();
-    let mut hidden = 0usize;
-    let mut small = 0usize;
+    let (mut hidden, mut small) = (0usize, 0usize);
     if let Ok(entries) = std::fs::read_dir(&folder) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -186,169 +171,136 @@ fn probe_video(path: String) -> VideoInfo {
                 else { ("ok".into(), String::new()) };
             VideoInfo { success:true, filename, path: path.clone(), duration:dur, width:w, height:h, codec, fps, size:file_size, audio_codec:ac, status:st, status_reason:sr, error:String::new() }
         }
-        Ok(out) => VideoInfo { success:false, filename, path: path.clone(), duration:0.0, width:0, height:0, codec:String::new(), fps:String::new(), size:file_size, audio_codec:String::new(), status:"error".into(), status_reason:"ffprobe 执行失败".into(), error:String::from_utf8_lossy(&out.stderr).chars().take(300).collect() },
+        Ok(out) => VideoInfo { success:false, filename, path: path.clone(), duration:0.0, width:0, height:0, codec:String::new(), fps:String::new(), size:file_size, audio_codec:String::new(), status:"error".into(), status_reason:"ffprobe 失败".into(), error:String::from_utf8_lossy(&out.stderr).chars().take(300).collect() },
         Err(e) => VideoInfo { success:false, filename, path: path.clone(), duration:0.0, width:0, height:0, codec:String::new(), fps:String::new(), size:file_size, audio_codec:String::new(), status:"error".into(), status_reason:"ffprobe 不可用".into(), error:e.to_string() },
     }
 }
 
 // ============================================================
-// 多文件串行全链路
+// 单文件转码（前端 orchestrator 逐个调用）
 // ============================================================
 #[derive(Serialize)]
-struct FileResult {
-    filename: String, status: String,
-    probe_ok: bool, probe_reason: String,
-    transcode_ok: bool, transcode_time: f64, proxy_path: String, proxy_size: u64,
-    upload_ok: bool, object_key: String, put_status: u16,
-    error: String,
-}
-
-#[derive(Serialize)]
-struct BatchUploadResult {
-    task_id: String, task_url: String,
-    total: usize, ok_count: usize, skipped: usize, failed: usize, uploaded: usize,
-    notify_ok: bool, notify_status: String,
-    files: Vec<FileResult>,
-    overall_success: bool,
-    proxy_dir: String,
-}
-
-#[derive(Deserialize)] struct InitResp { task_id: Option<String>, task_url: Option<String>, #[allow(dead_code)] error: Option<String> }
-#[derive(Deserialize)] struct PresignResp { success: Option<bool>, put_url: Option<String>, object_key: Option<String>, error: Option<String> }
-#[derive(Deserialize)] struct NotifyResp { status: Option<String>, #[allow(dead_code)] error: Option<String> }
+struct TranscodeResult { ok: bool, proxy_path: String, proxy_size: u64, time_secs: f64, error: String }
 
 #[tauri::command]
-fn batch_upload(server_url: String, folder: String, video_theme: String, news_event: String) -> BatchUploadResult {
-    let base = server_url.trim_end_matches('/');
+fn transcode_video(input_path: String, output_path: String) -> TranscodeResult {
     let ffmpeg = resolve_ffmpeg("ffmpeg");
-    let proxy_dir = "/tmp/openclaw_uploader_proxy";
-    std::fs::create_dir_all(proxy_dir).ok();
-
-    let scan = scan_folder(folder);
-    let mut file_results: Vec<FileResult> = Vec::new();
-    let mut ok_files: Vec<VideoInfo> = Vec::new();
-    let mut skipped = 0usize;
-
-    for sf in &scan.files {
-        let info = probe_video(sf.path.clone());
-        if info.status == "ok" {
-            ok_files.push(info);
-        } else {
-            skipped += 1;
-            file_results.push(FileResult {
-                filename: sf.filename.clone(), status: format!("跳过: {}", info.status_reason),
-                probe_ok: false, probe_reason: info.status_reason, transcode_ok: false, transcode_time: 0.0,
-                proxy_path: String::new(), proxy_size: 0, upload_ok: false, object_key: String::new(),
-                put_status: 0, error: info.error,
-            });
+    std::fs::create_dir_all(Path::new(&output_path).parent().unwrap_or(Path::new("/tmp"))).ok();
+    let t0 = std::time::Instant::now();
+    let tc = Command::new(&ffmpeg).args([
+        "-y","-i",&input_path,
+        "-vf","scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+        "-c:v","libx264","-preset","fast","-b:v","3M",
+        "-r","25","-pix_fmt","yuv420p","-movflags","+faststart",
+        "-c:a","aac","-b:a","128k",&output_path,
+    ]).output();
+    let time_secs = t0.elapsed().as_secs_f64();
+    match tc {
+        Ok(o) if o.status.success() => {
+            let proxy_size = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+            TranscodeResult { ok: true, proxy_path: output_path, proxy_size, time_secs, error: String::new() }
         }
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let last3: String = err.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+            TranscodeResult { ok: false, proxy_path: output_path, proxy_size: 0, time_secs, error: last3 }
+        }
+        Err(e) => TranscodeResult { ok: false, proxy_path: output_path, proxy_size: 0, time_secs, error: e.to_string() }
     }
+}
 
-    if ok_files.is_empty() {
-        return BatchUploadResult {
-            task_id: String::new(), task_url: String::new(),
-            total: scan.total, ok_count: 0, skipped, failed: 0, uploaded: 0,
-            notify_ok: false, notify_status: "没有可处理的视频文件".into(),
-            files: file_results, overall_success: false, proxy_dir: proxy_dir.into(),
-        };
-    }
+// ============================================================
+// task/init
+// ============================================================
+#[derive(Serialize)]
+struct TaskInitResult { ok: bool, task_id: String, task_url: String, error: String }
 
-    // task/init
-    let filenames: Vec<String> = ok_files.iter().map(|f| f.filename.clone()).collect();
-    let init_body = serde_json::json!({
-        "file_count": ok_files.len(), "filenames": filenames,
-        "task_context": { "video_theme": &video_theme, "news_event": &news_event, "source": "macos-uploader-phase3e" }
+#[derive(Deserialize)]
+struct InitResp { task_id: Option<String>, task_url: Option<String>, #[allow(dead_code)] error: Option<String> }
+
+#[tauri::command]
+fn task_init(server_url: String, file_count: usize, filenames: Vec<String>, video_theme: String, news_event: String) -> TaskInitResult {
+    let base = server_url.trim_end_matches('/');
+    let body = serde_json::json!({
+        "file_count": file_count, "filenames": filenames,
+        "task_context": { "video_theme": &video_theme, "news_event": &news_event, "source": "macos-uploader-phase3g" }
     });
-    let init_resp = ureq::post(&format!("{}/api/ui/task/init", base))
-        .set("Content-Type", "application/json")
-        .send_string(&init_body.to_string());
-
-    let (task_id, task_url) = match init_resp {
+    match ureq::post(&format!("{}/api/ui/task/init", base)).set("Content-Type","application/json").send_string(&body.to_string()) {
         Ok(r) => {
-            let body = r.into_string().unwrap_or_default();
-            match serde_json::from_str::<InitResp>(&body) {
-                Ok(d) if d.task_id.is_some() => (d.task_id.unwrap(), d.task_url.unwrap_or_default()),
-                _ => return BatchUploadResult { task_id: String::new(), task_url: String::new(), total: scan.total, ok_count: ok_files.len(), skipped, failed: ok_files.len(), uploaded: 0, notify_ok: false, notify_status: "创建任务失败".into(), files: file_results, overall_success: false, proxy_dir: proxy_dir.into() }
+            let b = r.into_string().unwrap_or_default();
+            match serde_json::from_str::<InitResp>(&b) {
+                Ok(d) if d.task_id.is_some() => TaskInitResult { ok: true, task_id: d.task_id.unwrap(), task_url: d.task_url.unwrap_or_default(), error: String::new() },
+                _ => TaskInitResult { ok: false, task_id: String::new(), task_url: String::new(), error: "解析失败".into() }
             }
         }
-        Err(e) => return BatchUploadResult { task_id: String::new(), task_url: String::new(), total: scan.total, ok_count: ok_files.len(), skipped, failed: ok_files.len(), uploaded: 0, notify_ok: false, notify_status: format!("服务器连接失败: {}", e), files: file_results, overall_success: false, proxy_dir: proxy_dir.into() }
+        Err(e) => TaskInitResult { ok: false, task_id: String::new(), task_url: String::new(), error: e.to_string() }
+    }
+}
+
+// ============================================================
+// 单文件上传（presign + PUT）
+// ============================================================
+#[derive(Serialize)]
+struct UploadResult { ok: bool, object_key: String, put_status: u16, error: String }
+
+#[derive(Deserialize)]
+struct PresignResp { success: Option<bool>, put_url: Option<String>, object_key: Option<String>, error: Option<String> }
+
+#[tauri::command]
+fn upload_file(server_url: String, task_id: String, proxy_path: String, filename: String) -> UploadResult {
+    let base = server_url.trim_end_matches('/');
+    let proxy_size = std::fs::metadata(&proxy_path).map(|m| m.len()).unwrap_or(0);
+
+    // presign
+    let ps_body = serde_json::json!({ "task_id": &task_id, "filename": &filename, "content_type": "video/mp4", "file_size": proxy_size });
+    let ps_resp = ureq::post(&format!("{}/api/ui/upload/presign-put", base))
+        .set("Content-Type","application/json").send_string(&ps_body.to_string());
+    let (put_url, obj_key) = match ps_resp {
+        Ok(r) => {
+            let b = r.into_string().unwrap_or_default();
+            match serde_json::from_str::<PresignResp>(&b) {
+                Ok(d) if d.success.unwrap_or(false) => (d.put_url.unwrap_or_default(), d.object_key.unwrap_or_default()),
+                Ok(d) => return UploadResult { ok: false, object_key: String::new(), put_status: 0, error: d.error.unwrap_or("presign 失败".into()) },
+                Err(e) => return UploadResult { ok: false, object_key: String::new(), put_status: 0, error: e.to_string() }
+            }
+        }
+        Err(e) => return UploadResult { ok: false, object_key: String::new(), put_status: 0, error: e.to_string() }
     };
 
-    let mut uploaded_keys: Vec<String> = Vec::new();
-    let mut failed = 0usize;
-
-    for (i, info) in ok_files.iter().enumerate() {
-        let stem = Path::new(&info.path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or("v".into());
-        let safe: String = stem.chars().map(|c| if c.is_alphanumeric() || c=='-' || c=='_' { c } else { '_' }).collect();
-        let proxy_path = format!("{}/proxy_{:04}_{}.mp4", proxy_dir, i, safe);
-
-        let t0 = std::time::Instant::now();
-        let tc = Command::new(&ffmpeg).args([
-            "-y","-i",&info.path,
-            "-vf","scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
-            "-c:v","libx264","-preset","fast","-b:v","3M",
-            "-r","25","-pix_fmt","yuv420p","-movflags","+faststart",
-            "-c:a","aac","-b:a","128k",&proxy_path,
-        ]).output();
-        let tc_time = t0.elapsed().as_secs_f64();
-        let tc_ok = tc.as_ref().map(|o| o.status.success()).unwrap_or(false);
-        let proxy_size = if tc_ok { std::fs::metadata(&proxy_path).map(|m| m.len()).unwrap_or(0) } else { 0 };
-
-        if !tc_ok {
-            let err = tc.map(|o| { let s = String::from_utf8_lossy(&o.stderr); s.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n") }).unwrap_or_else(|e| e.to_string());
-            failed += 1;
-            file_results.push(FileResult { filename: info.filename.clone(), status: "转码失败".into(), probe_ok: true, probe_reason: String::new(), transcode_ok: false, transcode_time: tc_time, proxy_path: String::new(), proxy_size: 0, upload_ok: false, object_key: String::new(), put_status: 0, error: err });
-            continue;
-        }
-
-        let proxy_fn = Path::new(&proxy_path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(info.filename.clone());
-        let ps_body = serde_json::json!({ "task_id": &task_id, "filename": &proxy_fn, "content_type": "video/mp4", "file_size": proxy_size });
-        let ps_resp = ureq::post(&format!("{}/api/ui/upload/presign-put", base))
-            .set("Content-Type", "application/json")
-            .send_string(&ps_body.to_string());
-
-        let (put_url, obj_key) = match ps_resp {
-            Ok(r) => {
-                let body = r.into_string().unwrap_or_default();
-                match serde_json::from_str::<PresignResp>(&body) {
-                    Ok(d) if d.success.unwrap_or(false) => (d.put_url.unwrap_or_default(), d.object_key.unwrap_or_default()),
-                    Ok(d) => { failed+=1; file_results.push(FileResult { filename:info.filename.clone(), status:"签名失败".into(), probe_ok:true, probe_reason:String::new(), transcode_ok:true, transcode_time:tc_time, proxy_path:proxy_path.clone(), proxy_size, upload_ok:false, object_key:String::new(), put_status:0, error:d.error.unwrap_or("presign fail".into()) }); continue; }
-                    Err(e) => { failed+=1; file_results.push(FileResult { filename:info.filename.clone(), status:"签名错误".into(), probe_ok:true, probe_reason:String::new(), transcode_ok:true, transcode_time:tc_time, proxy_path:proxy_path.clone(), proxy_size, upload_ok:false, object_key:String::new(), put_status:0, error:e.to_string() }); continue; }
-                }
-            }
-            Err(e) => { failed+=1; file_results.push(FileResult { filename:info.filename.clone(), status:"签名请求失败".into(), probe_ok:true, probe_reason:String::new(), transcode_ok:true, transcode_time:tc_time, proxy_path:proxy_path.clone(), proxy_size, upload_ok:false, object_key:String::new(), put_status:0, error:e.to_string() }); continue; }
-        };
-
-        let file_data = match std::fs::read(&proxy_path) {
-            Ok(d) => d,
-            Err(e) => { failed+=1; file_results.push(FileResult { filename:info.filename.clone(), status:"读取失败".into(), probe_ok:true, probe_reason:String::new(), transcode_ok:true, transcode_time:tc_time, proxy_path:proxy_path.clone(), proxy_size, upload_ok:false, object_key:obj_key.clone(), put_status:0, error:e.to_string() }); continue; }
-        };
-
-        let put_resp = ureq::put(&put_url).set("Content-Type", "video/mp4").send_bytes(&file_data);
-        match put_resp {
-            Ok(r) if r.status() == 200 => {
-                uploaded_keys.push(obj_key.clone());
-                file_results.push(FileResult { filename:info.filename.clone(), status:"已上传".into(), probe_ok:true, probe_reason:String::new(), transcode_ok:true, transcode_time:tc_time, proxy_path, proxy_size, upload_ok:true, object_key:obj_key, put_status:200, error:String::new() });
-            }
-            Ok(r) => { let st=r.status(); let body=r.into_string().unwrap_or_default(); failed+=1; file_results.push(FileResult { filename:info.filename.clone(), status:"上传失败".into(), probe_ok:true, probe_reason:String::new(), transcode_ok:true, transcode_time:tc_time, proxy_path, proxy_size, upload_ok:false, object_key:obj_key, put_status:st, error:body }); }
-            Err(e) => { failed+=1; file_results.push(FileResult { filename:info.filename.clone(), status:"上传错误".into(), probe_ok:true, probe_reason:String::new(), transcode_ok:true, transcode_time:tc_time, proxy_path, proxy_size, upload_ok:false, object_key:obj_key, put_status:0, error:e.to_string() }); }
-        }
+    // PUT
+    let file_data = match std::fs::read(&proxy_path) {
+        Ok(d) => d,
+        Err(e) => return UploadResult { ok: false, object_key: obj_key, put_status: 0, error: e.to_string() }
+    };
+    match ureq::put(&put_url).set("Content-Type","video/mp4").send_bytes(&file_data) {
+        Ok(r) if r.status() == 200 => UploadResult { ok: true, object_key: obj_key, put_status: 200, error: String::new() },
+        Ok(r) => { let st = r.status(); UploadResult { ok: false, object_key: obj_key, put_status: st, error: format!("HTTP {}", st) } }
+        Err(e) => UploadResult { ok: false, object_key: obj_key, put_status: 0, error: e.to_string() }
     }
+}
 
-    let uploaded = uploaded_keys.len();
-    let (notify_ok, notify_status) = if uploaded > 0 {
-        let nb = serde_json::json!({ "tos_keys": &uploaded_keys, "file_count": uploaded });
-        match ureq::post(&format!("{}/api/ui/task/{}/notify", base, task_id)).set("Content-Type","application/json").send_string(&nb.to_string()) {
-            Ok(r) => { let body = r.into_string().unwrap_or_default(); match serde_json::from_str::<NotifyResp>(&body) { Ok(d) => { let st = d.status.unwrap_or("unknown".into()); (st == "processing", st) } Err(_) => (false, "解析错误".into()) } }
-            Err(e) => (false, e.to_string())
+// ============================================================
+// notify
+// ============================================================
+#[derive(Serialize)]
+struct NotifyResult { ok: bool, status: String, error: String }
+
+#[derive(Deserialize)]
+struct NotifyResp { status: Option<String>, #[allow(dead_code)] error: Option<String> }
+
+#[tauri::command]
+fn task_notify(server_url: String, task_id: String, tos_keys: Vec<String>, file_count: usize) -> NotifyResult {
+    let base = server_url.trim_end_matches('/');
+    let body = serde_json::json!({ "tos_keys": &tos_keys, "file_count": file_count });
+    match ureq::post(&format!("{}/api/ui/task/{}/notify", base, task_id)).set("Content-Type","application/json").send_string(&body.to_string()) {
+        Ok(r) => {
+            let b = r.into_string().unwrap_or_default();
+            match serde_json::from_str::<NotifyResp>(&b) {
+                Ok(d) => { let st = d.status.unwrap_or("unknown".into()); NotifyResult { ok: st == "processing", status: st, error: String::new() } }
+                Err(_) => NotifyResult { ok: false, status: String::new(), error: "解析错误".into() }
+            }
         }
-    } else { (false, "无文件上传".into()) };
-
-    BatchUploadResult {
-        task_id, task_url, total: scan.total, ok_count: ok_files.len(),
-        skipped, failed, uploaded, notify_ok, notify_status,
-        files: file_results, overall_success: notify_ok && failed == 0,
-        proxy_dir: proxy_dir.into(),
+        Err(e) => NotifyResult { ok: false, status: String::new(), error: e.to_string() }
     }
 }
 
@@ -358,8 +310,9 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
-            check_health, get_diag_info,
-            detect_ffmpeg, probe_video, scan_folder, batch_upload,
+            check_health, get_diag_info, detect_ffmpeg,
+            scan_folder, probe_video, transcode_video,
+            task_init, upload_file, task_notify,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
