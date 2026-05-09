@@ -1,15 +1,19 @@
 /**
- * 元泉智影上传助手 — Phase 2B-2
+ * 元泉智影上传助手 — Phase 3D
  * 多文件串行：scan → probe → task/init → 逐文件(transcode→presign→PUT) → notify
  */
+
+import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { open as shellOpen } from '@tauri-apps/plugin-shell';
 
 const CK = "openclaw_uploader_config";
 function lc() { try { return JSON.parse(localStorage.getItem(CK)) || {}; } catch { return {}; } }
 function sc(p) { const c = { ...lc(), ...p }; localStorage.setItem(CK, JSON.stringify(c)); return c; }
 
-async function invoke(cmd, args) {
-  if (window.__TAURI__?.core) return window.__TAURI__.core.invoke(cmd, args);
-  return { success: false, error: "浏览器模式" };
+async function tauriInvoke(cmd, args) {
+  try { return await invoke(cmd, args); }
+  catch (e) { throw new Error(String(e)); }
 }
 
 const S = {
@@ -23,17 +27,17 @@ const S = {
 function render() {
   document.getElementById("app").innerHTML = `
     <h1>✂️ 元泉智影上传助手</h1>
-    <p class="subtitle">macOS 素材转码 / 上传客户端 · Phase 2B-2 · 多文件串行</p>
+    <p class="subtitle">macOS 素材转码 / 上传客户端</p>
 
     <div class="section">
       <div class="section-title">🔗 服务器</div>
-      <div class="row"><input type="text" id="i-url" value="${e(S.serverUrl)}" placeholder="http://47.93.194.154:8088" /><button onclick="doHealth()">测试</button></div>
+      <div class="row"><input type="text" id="i-url" value="${e(S.serverUrl)}" placeholder="http://47.93.194.154:8088" /><button onclick="doHealth()">测试连接</button></div>
       <div style="margin-top:6px">${badge(S.healthStatus, S.healthDetail)}</div>
     </div>
 
     <div class="section">
       <div class="section-title">🎬 FFmpeg</div>
-      <button onclick="doFfmpeg()">检测</button>
+      <button onclick="doFfmpeg()">检测 FFmpeg</button>
       ${ffmpegHtml()}
     </div>
 
@@ -46,7 +50,7 @@ function render() {
     <div class="section">
       <div class="section-title">📁 素材目录</div>
       <div class="row" style="gap:12px">
-        <button onclick="doSelectFolder()">选择文件夹</button>
+        <button onclick="doSelectFolder()">选择素材文件夹</button>
         <button onclick="doBatch()" class="primary" ${!canBatch()?'disabled':''}>${S.batchRunning?'处理中…':'开始转码上传'}</button>
       </div>
       ${S.folderPath?`<div class="folder-path">${e(S.folderPath)}</div>`:''}
@@ -55,7 +59,7 @@ function render() {
 
     ${batchHtml()}
 
-    <div class="footer">OpenClaw Uploader v0.4.0-alpha · Phase 2B-2 · 多文件串行转码上传</div>
+    <div class="footer">元泉智影上传助手 v0.1.0-alpha</div>
   `;
   bind();
 }
@@ -78,7 +82,6 @@ function scanHtml(){
 function batchHtml(){
   const r=S.batchResult;if(!r)return'';
   let h=`<div class="section"><div class="section-title">📊 处理结果</div>`;
-  // 汇总
   const sumBg=r.overall_success?'rgba(16,185,129,0.1)':'rgba(245,158,11,0.1)';
   const sumBd=r.overall_success?'rgba(16,185,129,0.3)':'rgba(245,158,11,0.3)';
   h+=`<div style="background:${sumBg};border:1px solid ${sumBd};border-radius:6px;padding:12px;font-size:13px;margin-bottom:12px">`;
@@ -86,9 +89,8 @@ function batchHtml(){
   h+=`<div style="color:var(--text-sec)">总计 ${r.total} · 上传 ${r.uploaded} · 跳过 ${r.skipped} · 失败 ${r.failed}</div>`;
   if(r.task_id)h+=`<div style="color:var(--text-sec);margin-top:4px">task_id：${e(r.task_id)}</div>`;
   if(r.notify_ok)h+=`<div style="color:var(--text-sec)">notify：${e(r.notify_status)}</div>`;
-  if(r.task_url&&r.notify_ok)h+=`<div style="margin-top:8px"><button onclick="openUrl('${e(r.task_url)}')" class="primary" style="font-size:12px;padding:5px 12px">🌐 打开 Web 工作台</button></div>`;
+  if(r.task_url&&r.notify_ok)h+=`<div style="margin-top:8px"><button onclick="doOpenUrl('${e(r.task_url)}')" class="primary" style="font-size:12px;padding:5px 12px">🌐 打开 Web 工作台</button></div>`;
   h+=`</div>`;
-  // 文件列表
   h+=`<div style="font-size:12px">`;
   for(const f of r.files){
     const icon=f.status==='uploaded'?'✅':f.status.startsWith('skipped')?'⏭️':'❌';
@@ -110,46 +112,54 @@ async function doHealth(){
   const url=S.serverUrl||document.getElementById('i-url')?.value?.trim();
   if(!url){S.healthStatus='fail';S.healthDetail='请输入地址';render();return}
   S.serverUrl=url;sc({serverUrl:url});S.healthStatus='wait';S.healthDetail='连接中…';render();
-  try{const r=await fetch(url.replace(/\/+$/,'')+'/api/health',{signal:AbortSignal.timeout(10000)});if(r.ok){const d=await r.json();S.healthStatus='ok';S.healthDetail=d.version||'ok'}else{S.healthStatus='fail';S.healthDetail='HTTP '+r.status}}catch(e){S.healthStatus='fail';S.healthDetail=e.message}
+  try{const r=await fetch(url.replace(/\/+$/,'')+'/api/health',{signal:AbortSignal.timeout(10000)});if(r.ok){const d=await r.json();S.healthStatus='ok';S.healthDetail=d.version||'ok'}else{S.healthStatus='fail';S.healthDetail='HTTP '+r.status}}catch(err){S.healthStatus='fail';S.healthDetail=err.message}
   render();
 }
 
 async function doFfmpeg(){
-  try{const[f,p]=await invoke('detect_ffmpeg');S.ffmpegInfo=f;S.ffprobeInfo=p}catch(e){S.ffmpegInfo={available:false,error:String(e)};S.ffprobeInfo=S.ffmpegInfo}
+  try{const[f,p]=await tauriInvoke('detect_ffmpeg');S.ffmpegInfo=f;S.ffprobeInfo=p}catch(err){S.ffmpegInfo={available:false,error:String(err)};S.ffprobeInfo=S.ffmpegInfo}
   render();
 }
 
 async function doSelectFolder(){
-  if(!window.__TAURI__){alert('需要 Tauri App');return}
   try{
-    const s=await window.__TAURI__.dialog.open({directory:true,multiple:false,title:'选择素材文件夹'});
-    if(s){S.folderPath=s;sc({lastFolder:s});S.batchResult=null;
-      try{S.scanResult=await invoke('scan_folder',{folder:s})}catch{S.scanResult=null}
-      render();}
-  }catch(e){console.error(e)}
+    const selected = await openDialog({directory:true, multiple:false, title:'选择素材文件夹'});
+    if(selected){
+      S.folderPath=selected;sc({lastFolder:selected});S.batchResult=null;
+      try{S.scanResult=await tauriInvoke('scan_folder',{folder:selected})}catch(err){S.scanResult=null;console.error('扫描失败:',err)}
+      render();
+    }
+  }catch(err){
+    alert('目录选择失败：'+String(err));
+    console.error('doSelectFolder error:',err);
+  }
 }
 
 async function doBatch(){
   if(!S.folderPath||S.batchRunning)return;
   S.batchRunning=true;S.batchResult=null;render();
   try{
-    S.batchResult=await invoke('batch_upload',{
+    S.batchResult=await tauriInvoke('batch_upload',{
       serverUrl:S.serverUrl, folder:S.folderPath,
       videoTheme:S.videoTheme||'', newsEvent:S.scriptText||''
     });
-    if(S.batchResult?.overall_success&&S.batchResult?.task_url){openUrl(S.batchResult.task_url)}
-  }catch(e){S.batchResult={files:[],total:0,ok_count:0,skipped:0,failed:1,uploaded:0,notify_ok:false,notify_status:String(e),overall_success:false,task_id:'',task_url:''}}
+    if(S.batchResult?.overall_success&&S.batchResult?.task_url){doOpenUrl(S.batchResult.task_url)}
+  }catch(err){S.batchResult={files:[],total:0,ok_count:0,skipped:0,failed:1,uploaded:0,notify_ok:false,notify_status:String(err),overall_success:false,task_id:'',task_url:''}}
   S.batchRunning=false;render();
 }
 
-function openUrl(u){if(window.__TAURI__)window.__TAURI__.shell.open(u);else window.open(u,'_blank')}
+async function doOpenUrl(u){
+  try{await shellOpen(u)}catch{window.open(u,'_blank')}
+}
 
 function bind(){
-  const u=document.getElementById('i-url');if(u)u.onchange=e=>{S.serverUrl=e.target.value.trim();sc({serverUrl:S.serverUrl})};
-  const t=document.getElementById('i-theme');if(t)t.onchange=e=>{S.videoTheme=e.target.value;sc({videoTheme:S.videoTheme})};
-  const s=document.getElementById('i-script');if(s)s.oninput=e=>{S.scriptText=e.target.value;sc({scriptText:S.scriptText})};
+  const u=document.getElementById('i-url');if(u)u.onchange=ev=>{S.serverUrl=ev.target.value.trim();sc({serverUrl:S.serverUrl})};
+  const t=document.getElementById('i-theme');if(t)t.onchange=ev=>{S.videoTheme=ev.target.value;sc({videoTheme:S.videoTheme})};
+  const s=document.getElementById('i-script');if(s)s.oninput=ev=>{S.scriptText=ev.target.value;sc({scriptText:S.scriptText})};
 }
 
 function init(){const c=lc();S.serverUrl=c.serverUrl||'http://47.93.194.154:8088';S.scriptText=c.scriptText||'';S.videoTheme=c.videoTheme||'';S.folderPath=c.lastFolder||'';render()}
-window.doHealth=doHealth;window.doFfmpeg=doFfmpeg;window.doSelectFolder=doSelectFolder;window.doBatch=doBatch;window.openUrl=openUrl;
+
+// Expose to onclick handlers in HTML
+window.doHealth=doHealth;window.doFfmpeg=doFfmpeg;window.doSelectFolder=doSelectFolder;window.doBatch=doBatch;window.doOpenUrl=doOpenUrl;
 init();
