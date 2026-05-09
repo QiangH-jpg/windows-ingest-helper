@@ -18,7 +18,7 @@ button.primary:hover:not(:disabled){background:var(--pri-h)}
 button.sm{font-size:10px;padding:2px 8px;min-width:auto}
 
 /* Video list table */
-.video-list{background:var(--bg2);border:1px solid var(--border2);border-radius:2px;max-height:220px;overflow-y:scroll}
+.video-list{background:var(--bg2);border:1px solid var(--border2);border-radius:2px;max-height:220px;overflow-y:scroll;scrollbar-width:thin}
 .file-table{width:100%;border-collapse:collapse;font-size:11px}
 .file-table thead{background:var(--bg3)}
 .file-table th{font-weight:600;text-align:left;padding:4px 6px;border-right:1px solid var(--border2);border-bottom:1px solid var(--border2);color:var(--text);white-space:nowrap}
