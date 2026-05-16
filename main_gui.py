@@ -38,7 +38,7 @@ except ImportError:
 # ============================================================
 # 服务器配置
 # ============================================================
-SERVER_URL = os.environ.get("VIDEO_TOOL_SERVER", "http://47.93.194.154:8088")
+SERVER_URL = os.environ.get("VIDEO_TOOL_SERVER", "http://47.93.194.154")
 TOS_BUCKET = os.environ.get("TOS_BUCKET", "e23-video")
 TOS_REGION = os.environ.get("TOS_REGION", "cn-beijing")
 TOS_ENDPOINT = f"tos-{TOS_REGION}.volces.com"
