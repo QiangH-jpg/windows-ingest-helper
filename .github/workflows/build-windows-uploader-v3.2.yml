@@ -1,0 +1,114 @@
+name: Build Windows Uploader v3.2
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v3.2*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller tos
+
+    - name: Download static FFmpeg (Windows x64)
+      shell: pwsh
+      run: |
+        $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+        Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
+        Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_extracted
+        $d = Get-ChildItem ffmpeg_extracted -Directory | Select-Object -First 1
+        New-Item -ItemType Directory -Force -Path v15-tasklink\build_release\bin
+        Copy-Item "$($d.FullName)\bin\ffmpeg.exe" v15-tasklink\build_release\bin\
+        Copy-Item "$($d.FullName)\bin\ffprobe.exe" v15-tasklink\build_release\bin\
+        Remove-Item ffmpeg.zip, ffmpeg_extracted -Recurse -Force
+        Write-Host "FFmpeg downloaded successfully"
+
+    - name: Build GUI EXE (onedir)
+      shell: pwsh
+      run: |
+        cd v15-tasklink
+        pyinstaller --onedir --windowed --name "元泉智影上传助手_v3.2" main_gui.py
+        Copy-Item dist\元泉智影上传助手_v3.2\* build_release\ -Recurse -Force
+        Write-Host "Build completed"
+        Get-ChildItem build_release\ -Recurse | Measure-Object -Property Length -Sum | ForEach-Object { Write-Host "Total size: $([math]::Round($_.Sum/1MB, 1)) MB" }
+
+    - name: Create release package
+      shell: pwsh
+      run: |
+        cd v15-tasklink
+        # Copy config example
+        Copy-Item config.json.example build_release\ -ErrorAction SilentlyContinue
+        
+        # Create version file
+        "v3.2" | Out-File -FilePath build_release\version.txt -Encoding utf8
+        "Build: ${{ github.run_id }}" | Out-File -FilePath build_release\version.txt -Encoding utf8 -Append
+        "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" | Out-File -FilePath build_release\version.txt -Encoding utf8 -Append
+        "Platform: Windows x64" | Out-File -FilePath build_release\version.txt -Encoding utf8 -Append
+        
+        # Create ZIP
+        Compress-Archive -Path build_release\* -DestinationPath OpenClawUploader-Windows-v3.2.zip -Force
+        $size = (Get-Item OpenClawUploader-Windows-v3.2.zip).Length
+        Write-Host "Package size: $size bytes ($([math]::Round($size/1MB, 1)) MB)"
+        
+        # Calculate SHA256
+        $hash = Get-FileHash OpenClawUploader-Windows-v3.2.zip -Algorithm SHA256
+        Write-Host "SHA256: $($hash.Hash)"
+        $hash.Hash | Out-File -FilePath SHA256SUMS.txt -Encoding utf8
+        
+        # Copy to repo root for artifact upload
+        Copy-Item OpenClawUploader-Windows-v3.2.zip ../
+        Copy-Item SHA256SUMS.txt ../
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenClawUploader-Windows-v3.2
+        path: OpenClawUploader-Windows-v3.2.zip
+        retention-days: 30
+
+    - name: Upload to TOS
+      if: ${{ env.TOS_PUBLISH_AK != '' }}
+      shell: pwsh
+      run: |
+        pip install tos
+        python -c "
+        import os
+        from tos import TosClientV2
+        
+        TOS_AK = os.getenv('TOS_PUBLISH_AK')
+        TOS_SK = os.getenv('TOS_PUBLISH_SK')
+        if not TOS_AK or not TOS_SK:
+            print('TOS 凭据未配置，跳过上传')
+            exit(0)
+            
+        TOS_BUCKET = 'e23-video'
+        TOS_REGION = 'cn-beijing'
+        TOS_ENDPOINT = f'tos-{TOS_REGION}.volces.com'
+        
+        client = TosClientV2(ak=TOS_AK, sk=TOS_SK, endpoint=TOS_ENDPOINT, region=TOS_REGION)
+        
+        zip_path = 'OpenClawUploader-Windows-v3.2.zip'
+        tos_key = 'release/OpenClawUploader-Windows-v3.2.zip'
+        
+        print(f'Uploading {zip_path} to {tos_key}...')
+        client.put_object_from_file(bucket=TOS_BUCKET, key=tos_key, file_path=zip_path)
+        print(f'Upload successful')
+        print(f'Download URL: https://{TOS_BUCKET}.{TOS_ENDPOINT}/{tos_key}')
+        "
+      env:
+        TOS_PUBLISH_AK: ${{ secrets.TOS_PUBLISH_AK }}
+        TOS_PUBLISH_SK: ${{ secrets.TOS_PUBLISH_SK }}
