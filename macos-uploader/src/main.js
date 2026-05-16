@@ -158,10 +158,10 @@ function diagHtml(){
 // Actions
 // ============================================================
 async function doBrowseInput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择素材文件夹（包含视频文件的目录）'});if(sel){S.inputDir=sel;sc({inputDir:sel});render()}}catch{}
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择素材文件夹（包含视频文件的目录）'});if(sel){S.inputDir=sel;sc({inputDir:sel});render()}}catch(e){log('[diag] doBrowseInput error: '+String(e))}
 }
 async function doBrowseOutput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择转码输出目录'});if(sel){S.outputDir=sel;sc({outputDir:sel});render()}}catch{}
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择转码输出目录'});if(sel){S.outputDir=sel;sc({outputDir:sel});render()}}catch(e){log('[diag] doBrowseOutput error: '+String(e))}
 }
 
 async function doHealth(){
