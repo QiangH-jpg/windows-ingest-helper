@@ -278,7 +278,33 @@ function bind(){
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
 }
 
-function init(){const c=lc();let url=c.serverUrl||'http://47.93.194.154:8088';sc({serverUrl:url});S.serverUrl=url;S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();checkClientVersion()}
+
+// 最小诊断：启动时测试 fetch 并打印详细日志
+async function diagFetch(){
+  const baseUrl=S.serverUrl;
+  log(`[diag] origin=${window.location.origin}`);
+  log(`[diag] serverUrl=${baseUrl}`);
+  log(`[diag] ua=${navigator.userAgent}`);
+  const tests=[
+    {url:`${baseUrl}/api/version`,label:'version'},
+    {url:`${baseUrl}/api/health`,label:'health'},
+  ];
+  for(const t of tests){
+    try{
+      log(`[diag] fetch ${t.label}: ${t.url} ...`);
+      const r=await fetch(t.url);
+      log(`[diag] ${t.label}: status=${r.status} ok=${r.ok}`);
+      log(`[diag] ${t.label}: headers=${[...r.headers.entries()].map(e=>e.join('=')).join('; ')}`);
+      const txt=await r.text();
+      log(`[diag] ${t.label}: body(${txt.length}B) ${txt.slice(0,80)}`);
+    }catch(e){
+      log(`[diag] ${t.label}: FAIL name=${e.name} msg=${e.message}`);
+      log(`[diag] ${t.label}: stack=${e.stack||'(none)'}`);
+    }
+  }
+}
+
+function init(){const c=lc();let u=c.serverUrl||'http://47.93.194.154';if(u&&u.includes(':8088')){u='http://47.93.194.154';sc({serverUrl:u});log('[diag] cleared :8088 from cached serverUrl');}S.serverUrl=u;S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();diagFetch();checkClientVersion()}
 
 // ============================================================
 // 客户端版本检查（v13.0 新增）
