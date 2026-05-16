@@ -278,7 +278,7 @@ function bind(){
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
 }
 
-function init(){const c=lc();let url=c.serverUrl||'http://47.93.194.154';if(url&&url.includes(':8088')){url='http://47.93.194.154';sc({serverUrl:url});}S.serverUrl=url;S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();checkClientVersion()}
+function init(){const c=lc();let url=c.serverUrl||'http://47.93.194.154:8088';sc({serverUrl:url});S.serverUrl=url;S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();checkClientVersion()}
 
 // ============================================================
 // 客户端版本检查（v13.0 新增）
