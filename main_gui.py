@@ -85,7 +85,7 @@ def format_size_mb(size_bytes):
 class IngestHelperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Windows 上传/预处理助手 v3.2")
+        self.root.title(f"Windows 上传/预处理助手 v{CLIENT_VERSION}")
         self.root.geometry("900x780")
 
         self.input_dir = tk.StringVar()
@@ -103,12 +103,15 @@ class IngestHelperGUI:
         self.manifest_path = None
         self.uploaded_tos_keys = []
 
+        # v13.0.1: 服务端版本信息
+        self.server_version = ""
+
         self._resolve_ffmpeg()
         self.setup_ui()
         self._check_client_version()
 
     def _check_client_version(self):
-        """启动时检查客户端版本（v13.0 新增）"""
+        """启动时检查客户端版本（v13.0.1 增强：显示服务端版本 + 下载地址）"""
         def _do_check():
             try:
                 url = f"{SERVER_URL}/api/version"
@@ -118,16 +121,26 @@ class IngestHelperGUI:
                     data = json.loads(resp.read().decode('utf-8'))
                 if data.get('status') != 'ok':
                     return
+                # 保存服务端版本号
+                self.server_version = data.get('server_version', '')
                 min_ver = data.get('min_client_version', '0.0.0')
                 rec_ver = data.get('recommended_client_version', '0.0.0')
+                # 更新状态栏
+                if self.server_version:
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"就绪 | Uploader v{CLIENT_VERSION} | Server {self.server_version}"
+                    ))
                 if _ver_lt(CLIENT_VERSION, min_ver):
-                    self.root.after(0, lambda: messagebox.showerror(
-                        "版本过旧",
+                    download_url = data.get('download', {}).get('windows', '') or data.get('download', {}).get('macos', '')
+                    msg = (
                         f"当前上传助手版本过旧\n\n"
                         f"当前版本：v{CLIENT_VERSION}\n"
                         f"服务器最低要求：v{min_ver}\n\n"
                         f"请下载最新版本后继续使用。"
-                    ))
+                    )
+                    if download_url:
+                        msg += f"\n\n下载地址：\n{download_url}"
+                    self.root.after(0, lambda: messagebox.showerror("版本过旧", msg))
                     self.log(f"❌ 客户端版本过旧 (v{CLIENT_VERSION} < 最低 v{min_ver})，已阻止上传")
                 elif _ver_lt(CLIENT_VERSION, rec_ver):
                     self.log(f"⚠️ 建议升级到 v{rec_ver} (当前 v{CLIENT_VERSION})")
@@ -264,7 +277,7 @@ class IngestHelperGUI:
         self.log_text.pack(fill="both", expand=True)
 
         # ---- 状态栏 ----
-        self.status_var = tk.StringVar(value="就绪")
+        self.status_var = tk.StringVar(value=f"就绪 | Uploader v{CLIENT_VERSION}")
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief="sunken")
         status_bar.pack(fill="x", padx=10, pady=5)
 
@@ -273,6 +286,9 @@ class IngestHelperGUI:
     def _print_startup_diag(self):
         self.log("=" * 50)
         self.log("Windows 上传/预处理助手 v3.2")
+        self.log(f"客户端版本: v{CLIENT_VERSION}")
+        if self.server_version:
+            self.log(f"服务端版本: {self.server_version}")
         self.log("=" * 50)
         self.log(f"程序目录: {self._app_dir}")
         self.log(f"bin 目录: {self._bin_dir}")
