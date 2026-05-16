@@ -7,7 +7,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 
 const CK="openclaw_uploader_config";
-const CLIENT_VERSION="3.1.2";
+const CLIENT_VERSION="3.2";
 function lc(){try{return JSON.parse(localStorage.getItem(CK))||{}}catch{return{}}}
 function sc(p){const c={...lc(),...p};localStorage.setItem(CK,JSON.stringify(c));return c}
 function e(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
