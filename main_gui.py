@@ -36,6 +36,24 @@ except ImportError:
     HAS_URLLIB = False
 
 # ============================================================
+# 客户端版本号（v13.0 新增）
+# ============================================================
+CLIENT_VERSION = "3.1.2"
+
+
+# ============================================================
+# 版本比较工具（v13.0 新增）
+# ============================================================
+def _parse_ver(v):
+    import re
+    m = re.match(r'v?(\d+)\.(\d+)\.(\d+)', str(v))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)
+
+
+def _ver_lt(a, b):
+    return _parse_ver(a) < _parse_ver(b)
+
+# ============================================================
 # 服务器配置
 # ============================================================
 SERVER_URL = os.environ.get("VIDEO_TOOL_SERVER", "http://47.93.194.154")
@@ -87,6 +105,38 @@ class IngestHelperGUI:
 
         self._resolve_ffmpeg()
         self.setup_ui()
+        self._check_client_version()
+
+    def _check_client_version(self):
+        """启动时检查客户端版本（v13.0 新增）"""
+        def _do_check():
+            try:
+                url = f"{SERVER_URL}/api/version"
+                req = urllib.request.Request(url, method='GET')
+                req.add_header('Content-Type', 'application/json')
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                if data.get('status') != 'ok':
+                    return
+                min_ver = data.get('min_client_version', '0.0.0')
+                rec_ver = data.get('recommended_client_version', '0.0.0')
+                if _ver_lt(CLIENT_VERSION, min_ver):
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "版本过旧",
+                        f"当前上传助手版本过旧\n\n"
+                        f"当前版本：v{CLIENT_VERSION}\n"
+                        f"服务器最低要求：v{min_ver}\n\n"
+                        f"请下载最新版本后继续使用。"
+                    ))
+                    self.log(f"❌ 客户端版本过旧 (v{CLIENT_VERSION} < 最低 v{min_ver})，已阻止上传")
+                elif _ver_lt(CLIENT_VERSION, rec_ver):
+                    self.log(f"⚠️ 建议升级到 v{rec_ver} (当前 v{CLIENT_VERSION})")
+                else:
+                    self.log(f"✅ 客户端版本正常 (v{CLIENT_VERSION})")
+            except Exception as e:
+                self.log(f"⚠️ 无法获取服务器版本信息: {e}，允许继续")
+
+        threading.Thread(target=_do_check, daemon=True).start()
 
     def _resolve_ffmpeg(self):
         global FFMPEG, FFPROBE
