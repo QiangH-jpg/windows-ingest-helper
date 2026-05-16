@@ -7,7 +7,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 
 const CK="openclaw_uploader_config";
-const CLIENT_VERSION="3.2.0";
+const CLIENT_VERSION="3.2.1";
 function lc(){try{return JSON.parse(localStorage.getItem(CK))||{}}catch{return{}}}
 function sc(p){const c={...lc(),...p};localStorage.setItem(CK,JSON.stringify(c));return c}
 function e(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -46,12 +46,12 @@ function render(){
     <div class="field-row">
       <label>素材目录:</label>
       <input type="text" id="i-input" value="${e(S.inputDir)}" readonly class="flex1"/>
-      <button onclick="doBrowseInput()">浏览...</button>
+      <button id="btn-browse-input">浏览...</button>
     </div>
     <div class="field-row">
       <label>输出目录:</label>
       <input type="text" id="i-output" value="${e(S.outputDir)}" readonly class="flex1"/>
-      <button onclick="doBrowseOutput()">浏览...</button>
+      <button id="btn-browse-output">浏览...</button>
     </div>
   </div>
 
@@ -158,10 +158,12 @@ function diagHtml(){
 // Actions
 // ============================================================
 async function doBrowseInput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择素材文件夹（包含视频文件的目录）'});if(sel){S.inputDir=sel;sc({inputDir:sel});render()}}catch(e){log('[diag] doBrowseInput error: '+String(e))}
+  log('[diag] click browse material');
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择素材文件夹（包含视频文件的目录）'});if(sel){log(`[diag] selected input: ${sel}`);S.inputDir=sel;sc({inputDir:sel});render()}else{log('[diag] cancelled input')}}catch(e){log(`[diag] doBrowseInput error: ${e.name} ${e.message}`)}
 }
 async function doBrowseOutput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择转码输出目录'});if(sel){S.outputDir=sel;sc({outputDir:sel});render()}}catch(e){log('[diag] doBrowseOutput error: '+String(e))}
+  log('[diag] click browse output');
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择转码输出目录'});if(sel){log(`[diag] selected output: ${sel}`);S.outputDir=sel;sc({outputDir:sel});render()}else{log('[diag] cancelled output')}}catch(e){log(`[diag] doBrowseOutput error: ${e.name} ${e.message}`)}
 }
 
 async function doHealth(){
@@ -276,35 +278,12 @@ async function toggleDiag(){S.showDiag=!S.showDiag;if(S.showDiag&&!S.diagInfo){t
 function bind(){
   const t=document.getElementById('i-theme');if(t)t.onchange=ev=>{S.videoTheme=ev.target.value;sc({videoTheme:S.videoTheme})};
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
+  // 浏览按钮事件绑定
+  const bi=document.getElementById('btn-browse-input');if(bi)bi.onclick=doBrowseInput;
+  const bo=document.getElementById('btn-browse-output');if(bo)bo.onclick=doBrowseOutput;
 }
 
-
-// 最小诊断：启动时测试 fetch 并打印详细日志
-async function diagFetch(){
-  const baseUrl=S.serverUrl;
-  log(`[diag] origin=${window.location.origin}`);
-  log(`[diag] serverUrl=${baseUrl}`);
-  log(`[diag] ua=${navigator.userAgent}`);
-  const tests=[
-    {url:`${baseUrl}/api/version`,label:'version'},
-    {url:`${baseUrl}/api/health`,label:'health'},
-  ];
-  for(const t of tests){
-    try{
-      log(`[diag] fetch ${t.label}: ${t.url} ...`);
-      const r=await fetch(t.url);
-      log(`[diag] ${t.label}: status=${r.status} ok=${r.ok}`);
-      log(`[diag] ${t.label}: headers=${[...r.headers.entries()].map(e=>e.join('=')).join('; ')}`);
-      const txt=await r.text();
-      log(`[diag] ${t.label}: body(${txt.length}B) ${txt.slice(0,80)}`);
-    }catch(e){
-      log(`[diag] ${t.label}: FAIL name=${e.name} msg=${e.message}`);
-      log(`[diag] ${t.label}: stack=${e.stack||'(none)'}`);
-    }
-  }
-}
-
-function init(){const c=lc();let u=c.serverUrl||'http://47.93.194.154';if(u&&u.includes(':8088')){u='http://47.93.194.154';sc({serverUrl:u});log('[diag] cleared :8088 from cached serverUrl');}S.serverUrl=u;S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();diagFetch();checkClientVersion()}
+function init(){const c=lc();let url=c.serverUrl||'http://47.93.194.154:8088';sc({serverUrl:url});S.serverUrl=url;S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();checkClientVersion()}
 
 // ============================================================
 // 客户端版本检查（v13.0 新增）
