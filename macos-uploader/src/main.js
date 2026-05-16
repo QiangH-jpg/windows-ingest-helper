@@ -7,6 +7,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 
 const CK="openclaw_uploader_config";
+const CLIENT_VERSION="3.1.2";
 function lc(){try{return JSON.parse(localStorage.getItem(CK))||{}}catch{return{}}}
 function sc(p){const c={...lc(),...p};localStorage.setItem(CK,JSON.stringify(c));return c}
 function e(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -17,6 +18,7 @@ const PROXY_DIR="/tmp/openclaw_uploader_proxy";
 
 const S={
   serverUrl:"",healthOk:false,healthMsg:"未测试",
+  serverVersion:"", // v13.0.1: 服务端版本号
   videoTheme:"",newsEvent:"",
   inputDir:"",outputDir:PROXY_DIR,
   folderPath:"",
@@ -37,7 +39,7 @@ function renderLog(){const el=document.getElementById('log-area');if(el){el.inne
 
 function render(){
   document.getElementById("app").innerHTML=`
-  <div class="toolbar">✂️ 元泉智影上传助手 <span class="ver">v0.1.0</span></div>
+  <div class="toolbar">✂️ 元泉智影上传助手 <span class="ver">v${CLIENT_VERSION}</span>${S.serverVersion?` <span class="ver" style="opacity:0.6">Server ${e(S.serverVersion)}</span>`:''} <span class="ver" style="opacity:0.5;font-size:11px">${S.healthOk?'✅ Connected':'❌'}</span></div>
 
   <div class="section">
     <div class="section-title">1. 选择目录</div>
@@ -163,7 +165,7 @@ async function doBrowseOutput(){
 }
 
 async function doHealth(){
-  const url=S.serverUrl||'http://47.93.194.154:8088';
+  const url=S.serverUrl||'http://47.93.194.154';
   S.serverUrl=url;sc({serverUrl:url});S.healthMsg='连接中…';render();
   try{const r=await invoke('check_health',{serverUrl:url});S.healthOk=r.ok;S.healthMsg=r.ok?`已连接 · ${r.version||'ok'}`:r.error||`HTTP ${r.status}`;log(S.healthOk?`✅ 服务器连接成功 ${r.version}`:`❌ 服务器连接失败: ${r.error}`)}catch(err){S.healthOk=false;S.healthMsg=String(err);log(`❌ ${err}`)}
   render();
@@ -276,6 +278,47 @@ function bind(){
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
 }
 
-function init(){const c=lc();S.serverUrl=c.serverUrl||'http://47.93.194.154:8088';S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render()}
+function init(){const c=lc();S.serverUrl=c.serverUrl||'http://47.93.194.154';S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();checkClientVersion()}
+
+// ============================================================
+// 客户端版本检查（v13.0 新增）
+// ============================================================
+function parseVer(v){
+  const m=String(v).replace(/^v/,'').match(/(\d+)\.(\d+)\.(\d+)/);
+  return m?{major:+m[1],minor:+m[2],patch:+m[3]}:{major:0,minor:0,patch:0};
+}
+function verLt(a,b){
+  const A=parseVer(a),B=parseVer(b);
+  if(A.major!==B.major)return A.major<B.major;
+  if(A.minor!==B.minor)return A.minor<B.minor;
+  return A.patch<B.patch;
+}
+async function checkClientVersion(){
+  const url=S.serverUrl||'http://47.93.194.154';
+  try{
+    const resp=await fetch(`${url}/api/version`);
+    if(!resp.ok)return;
+    const data=await resp.json();
+    if(data.status!=='ok')return;
+    S.serverVersion=data.server_version||''; // v13.0.1: 保存服务端版本号
+    const minVer=data.min_client_version;
+    const recVer=data.recommended_client_version;
+    if(minVer&&verLt(CLIENT_VERSION,minVer)){
+      const downloadUrl=data.download?.macos||data.download?.windows||'';
+      let msg=`当前上传助手版本过旧\n\n当前版本：v${CLIENT_VERSION}\n服务器最低要求：v${minVer}\n\n请下载最新版本后继续使用。`;
+      if(downloadUrl)msg+=`\n\n下载地址：\n${downloadUrl}`;
+      alert(msg);
+      log(`❌ 客户端版本过旧 (v${CLIENT_VERSION} < 最低 v${minVer})，已阻止上传`);
+      S.healthOk=false;S.healthMsg=`版本过旧 (需 ≥ v${minVer})`;render();
+    }else if(recVer&&verLt(CLIENT_VERSION,recVer)){
+      log(`⚠️ 建议升级到 v${recVer} (当前 v${CLIENT_VERSION})`);
+    }else{
+      log(`✅ 客户端版本正常 (v${CLIENT_VERSION})`);
+    }
+    render(); // 重新渲染以显示服务端版本号
+  }catch(err){
+    log(`⚠️ 无法获取服务器版本信息: ${err}，允许继续`);
+  }
+}
 window.doBrowseInput=doBrowseInput;window.doBrowseOutput=doBrowseOutput;window.doHealth=doHealth;window.doFfmpeg=doFfmpeg;window.doScan=doScan;window.doTranscode=doTranscode;window.doUpload=doUpload;window.doOpenUrl=doOpenUrl;window.toggleDiag=toggleDiag;
 init();

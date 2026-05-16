@@ -1,7 +1,7 @@
 {
   "name": "openclaw-uploader",
-  "version": "0.1.0",
-  "description": "元泉智影上传助手 — macOS 素材转码/上传客户端",
+  "version": "3.2.0",
+  "description": "\u5143\u6cc9\u667a\u5f71\u4e0a\u4f20\u52a9\u624b \u2014 macOS \u7d20\u6750\u8f6c\u7801/\u4e0a\u4f20\u5ba2\u6237\u7aef",
   "private": true,
   "scripts": {
     "dev": "vite",
