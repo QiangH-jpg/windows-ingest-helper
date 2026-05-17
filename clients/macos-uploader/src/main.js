@@ -46,12 +46,12 @@ function render(){
     <div class="field-row">
       <label>素材目录:</label>
       <input type="text" id="i-input" value="${e(S.inputDir)}" readonly class="flex1"/>
-      <button onclick="doBrowseInput()">浏览...</button>
+      <button id="btn-browse-input">浏览...</button>
     </div>
     <div class="field-row">
       <label>输出目录:</label>
       <input type="text" id="i-output" value="${e(S.outputDir)}" readonly class="flex1"/>
-      <button onclick="doBrowseOutput()">浏览...</button>
+      <button id="btn-browse-output">浏览...</button>
     </div>
   </div>
 
@@ -158,10 +158,12 @@ function diagHtml(){
 // Actions
 // ============================================================
 async function doBrowseInput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择素材文件夹（包含视频文件的目录）'});if(sel){S.inputDir=sel;sc({inputDir:sel});render()}}catch{}
+  log('[diag] click browse material');
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择素材文件夹（包含视频文件的目录）'});if(sel){log(`[diag] selected input: ${sel}`);S.inputDir=sel;sc({inputDir:sel});render()}else{log('[diag] cancelled input')}}catch(e){log(`[diag] doBrowseInput error: ${e.name} ${e.message}`)}
 }
 async function doBrowseOutput(){
-  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择转码输出目录'});if(sel){S.outputDir=sel;sc({outputDir:sel});render()}}catch{}
+  log('[diag] click browse output');
+  try{const sel=await openDialog({directory:true,multiple:false,title:'请选择转码输出目录'});if(sel){log(`[diag] selected output: ${sel}`);S.outputDir=sel;sc({outputDir:sel});render()}else{log('[diag] cancelled output')}}catch(e){log(`[diag] doBrowseOutput error: ${e.name} ${e.message}`)}
 }
 
 async function doHealth(){
@@ -177,14 +179,19 @@ async function doFfmpeg(){
 }
 
 async function doScan(){
+  log('[diag] click scan materials');
+  log(`[diag] material_dir=${S.inputDir||'(empty)'}`);
+  log(`[diag] output_dir=${S.outputDir||'(empty)'}`);
   if(!S.inputDir){log('❌ 请先选择素材目录');return}
   S.processing=true;S.phase='scanning';S.files=[];S.logs=[];render();
   log(`📂 扫描目录: ${S.inputDir}`);
+  log('[diag] invoking scan command...');
   try{
     const scan=await invoke('scan_folder',{folder:S.inputDir});
+    log(`[diag] scan result=${scan.total}`);
     log(`发现 ${scan.total} 个视频文件${scan.skipped_hidden?' ('+scan.skipped_hidden+' 隐藏跳过)':''}${scan.skipped_small?' ('+scan.skipped_small+' 过小跳过)':''}`);
     S.files=scan.files.map(f=>({...f,duration:0,width:0,height:0,status:'pending',proxyPath:'',proxySize:0,tcTime:0,objectKey:'',error:''}));
-  }catch(err){log(`❌ 扫描失败: ${err}`)}
+  }catch(err){log(`[diag] scan error=${err}`);log(`❌ 扫描失败: ${err}`)}
   S.processing=false;S.phase='idle';render();
 }
 
@@ -276,9 +283,11 @@ async function toggleDiag(){S.showDiag=!S.showDiag;if(S.showDiag&&!S.diagInfo){t
 function bind(){
   const t=document.getElementById('i-theme');if(t)t.onchange=ev=>{S.videoTheme=ev.target.value;sc({videoTheme:S.videoTheme})};
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
+  // 浏览按钮事件绑定
+  const bi=document.getElementById('btn-browse-input');if(bi)bi.onclick=doBrowseInput;
+  const bo=document.getElementById('btn-browse-output');if(bo)bo.onclick=doBrowseOutput;
 }
 
-function init(){const c=lc();let u=c.serverUrl||'http://47.93.194.154';if(u&&u.includes(':8088')){u='http://47.93.194.154';sc({serverUrl:u});log('[diag] cleared :8088 from cached serverUrl');}S.serverUrl=u;S.newsEvent='';S.videoTheme='';S.inputDir='';S.outputDir='';render();diagFetch();checkClientVersion()}
 
 // 最小诊断：启动时测试 fetch 并打印详细日志
 async function diagFetch(){
@@ -304,6 +313,8 @@ async function diagFetch(){
     }
   }
 }
+
+function init(){const c=lc();let u=c.serverUrl||'http://47.93.194.154';if(u&&u.includes(':8088')){u='http://47.93.194.154';sc({serverUrl:u});log('[diag] cleared :8088 from cached serverUrl');}S.serverUrl=u;S.videoTheme=c.videoTheme||'';S.inputDir=c.inputDir||'';S.outputDir=c.outputDir||'/tmp/openclaw_uploader_proxy';S.newsEvent='';log('[diag] init: serverUrl='+S.serverUrl+' inputDir='+(S.inputDir||'(none)'));render();diagFetch();checkClientVersion()}
 
 // ============================================================
 // 客户端版本检查（v13.0 新增）
