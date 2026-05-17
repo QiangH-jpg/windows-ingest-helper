@@ -182,7 +182,7 @@ async function doScan(){
   log('[diag] click scan materials');
   log(`[diag] material_dir=${S.inputDir||'(empty)'}`);
   log(`[diag] output_dir=${S.outputDir||'(empty)'}`);
-  if(!S.inputDir){
+  if(!S.inputDir){log('❌ 请先选择素材目录');return;}
   S.processing=true;S.phase='scanning';S.files=[];S.logs=[];render();
   log(`📂 扫描目录: ${S.inputDir}`);
   log('[diag] invoking scan command...');
