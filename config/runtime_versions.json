@@ -1,0 +1,7 @@
+{
+  "server_version": "v13.0.0",
+  "min_client_version": "0.0.0",
+  "recommended_client_version": "3.2.1",
+  "api_runtime": "nginx+flask",
+  "upload_entry": "http://47.93.194.154"
+}

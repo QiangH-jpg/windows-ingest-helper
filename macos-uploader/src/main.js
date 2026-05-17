@@ -7,7 +7,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 
 const CK="openclaw_uploader_config";
-const CLIENT_VERSION="3.2";
+const CLIENT_VERSION="3.2.1";
 function lc(){try{return JSON.parse(localStorage.getItem(CK))||{}}catch{return{}}}
 function sc(p){const c={...lc(),...p};localStorage.setItem(CK,JSON.stringify(c));return c}
 function e(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -76,9 +76,9 @@ function render(){
       </table>
     </div>
     <div class="button-bar">
-      <button onclick="doScan()">扫描素材</button>
-      <button onclick="doTranscode()" ${canTranscode()?'':'disabled'}>转码 Proxy</button>
-      <button onclick="doUpload()" ${canUpload()?'':'disabled'}>上传 TOS</button>
+      <button id="btn-scan">扫描素材</button>
+      <button id="btn-transcode" ${canTranscode()?'':'disabled'}>转码 Proxy</button>
+      <button id="btn-upload" ${canUpload()?'':'disabled'}>上传 TOS</button>
       <div class="progress-wrap"><div class="progress-bar" style="width:${progressPct()}%"></div></div>
     </div>
   </div>
@@ -182,7 +182,7 @@ async function doScan(){
   log('[diag] click scan materials');
   log(`[diag] material_dir=${S.inputDir||'(empty)'}`);
   log(`[diag] output_dir=${S.outputDir||'(empty)'}`);
-  if(!S.inputDir){log('❌ 请先选择素材目录');return}
+  if(!S.inputDir){
   S.processing=true;S.phase='scanning';S.files=[];S.logs=[];render();
   log(`📂 扫描目录: ${S.inputDir}`);
   log('[diag] invoking scan command...');
@@ -283,9 +283,12 @@ async function toggleDiag(){S.showDiag=!S.showDiag;if(S.showDiag&&!S.diagInfo){t
 function bind(){
   const t=document.getElementById('i-theme');if(t)t.onchange=ev=>{S.videoTheme=ev.target.value;sc({videoTheme:S.videoTheme})};
   const s=document.getElementById('i-event');if(s)s.oninput=ev=>{S.newsEvent=ev.target.value;sc({newsEvent:S.newsEvent})};
-  // 浏览按钮事件绑定
+  // 所有按钮通过 JS 绑定，不依赖 inline onclick（避免 CSP 拦截）
   const bi=document.getElementById('btn-browse-input');if(bi)bi.onclick=doBrowseInput;
   const bo=document.getElementById('btn-browse-output');if(bo)bo.onclick=doBrowseOutput;
+  const bs=document.getElementById('btn-scan');if(bs)bs.onclick=doScan;
+  const bt=document.getElementById('btn-transcode');if(bt)bt.onclick=doTranscode;
+  const bu=document.getElementById('btn-upload');if(bu)bu.onclick=doUpload;
 }
 
 
@@ -320,8 +323,12 @@ function init(){const c=lc();let u=c.serverUrl||'http://47.93.194.154';if(u&&u.i
 // 客户端版本检查（v13.0 新增）
 // ============================================================
 function parseVer(v){
-  const m=String(v).replace(/^v/,'').match(/(\d+)\.(\d+)\.(\d+)/);
-  return m?{major:+m[1],minor:+m[2],patch:+m[3]}:{major:0,minor:0,patch:0};
+  const s=String(v).replace(/^v/,'');
+  let m=s.match(/(\d+)\.(\d+)\.(\d+)/);
+  if(m)return{major:+m[1],minor:+m[2],patch:+m[3]};
+  m=s.match(/(\d+)\.(\d+)/);
+  if(m)return{major:+m[1],minor:+m[2],patch:0};
+  return{major:0,minor:0,patch:0};
 }
 function verLt(a,b){
   const A=parseVer(a),B=parseVer(b);
