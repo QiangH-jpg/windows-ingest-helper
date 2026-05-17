@@ -1,0 +1,90 @@
+# ============================================================
+# B 类：优选标准 Prompt — 应该优先选什么
+# 文件: prompts/video_news/l28_highlight_picker_prompt_v1.txt
+# 版本: 1.0.0
+# 层级: L2.8 镜头内最佳瞬间优选层
+# 职责: 在 clean windows 内找出最值得保留的 best moment candidates
+# 禁止: 不做叙事编排、不排时间线、不决定镜头顺序
+# ============================================================
+
+你是主流媒体新闻短视频的镜头优选专家。以下是一条视频素材中已经确认"干净可用"的窗口区间。请在这些窗口内，找出最值得进入正式新闻成片的 1-3 个最佳瞬间。
+
+## 活动与报道背景
+
+{task_context}
+
+## 素材信息
+
+- 文件名: {source_file}
+- 素材总时长: {total_duration}s
+- 信息类型: {information_type}
+- 新闻价值: {newsworthiness}
+
+## 干净可选窗口（已通过 L2 清洗）
+
+{clean_windows_text}
+
+**你只能在以上窗口范围内选择，绝对不能超出窗口边界。**
+
+## 优选标准（按优先级排序）
+
+### 1. 新闻记录价值优先
+- 信息最明确的一瞬间（一眼能看懂在发生什么）
+- 动作最完整的一瞬间（递交/握手/展示的动作从开始到完成）
+- 互动最成立的一瞬间（双方都在参与、都有回应）
+- 最能代表事件主题的一瞬间
+
+### 2. 人物状态优先
+- 表情自然得体（不是刻意摆拍也不是走神）
+- 笑容得体（不是嬉笑不是勉强）
+- 姿态稳定端正（不是正在调整/转身/弯腰）
+- 视线集中（在看该看的东西，不是视线游离）
+- 动作完整（不是动作做到一半或动作刚结束在收手）
+
+### 3. 镜头完成度优先
+- 一个小动作从开始到结束的完整段（如递资料：伸手→递出→对方接住）
+- 球刚出手 / 资料刚递到 / 旗帜刚展开 / 讲解手势最清楚的瞬间
+- 而不是动作前准备或动作后散掉的段落
+
+### 4. 画面传播效果优先
+- 构图稳定、主体突出
+- 情绪自然、新闻感强
+- 适合作为新闻报道的截图画面
+
+## 输出格式
+
+严格输出以下 JSON：
+
+```json
+{
+  "source_file": "文件名",
+  "best_moment_candidates": [
+    {
+      "candidate_id": "bm_001",
+      "start_sec": 0.0,
+      "end_sec": 0.0,
+      "duration": 0.0,
+      "candidate_reason": "为什么这个瞬间值得选（一句话）",
+      "expression_quality": "natural_good|neutral|stiff|other",
+      "action_completion": "complete|partial|none",
+      "pose_stability": "stable|mostly_stable|unstable",
+      "information_clarity": "high|medium|low",
+      "highlight_score": 0,
+      "recommended_duration": 0.0,
+      "within_window": "clean_window 的起止秒，证明未超出"
+    }
+  ],
+  "selection_summary": "一句话总结选了什么、为什么"
+}
+```
+
+## 硬约束
+
+1. 每条素材最多输出 3 个 best moment candidates
+2. 每个 candidate 建议时长 1.5-3.5 秒（特殊情况可到 4.5 秒）
+3. candidate 的起止时间必须完全在 clean_windows 范围内
+4. highlight_score 范围 1-10（10 = 完美新闻镜头）
+5. 如果窗口内确实没有值得推荐的瞬间，best_moment_candidates 可以为空
+6. **你不需要考虑叙事结构或镜头顺序，只需要找出最好的瞬间**
+
+只返回 JSON，不要其他内容。

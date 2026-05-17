@@ -1,0 +1,94 @@
+# ============================================================
+# L2 + L2.8 合并 Prompt v1.0
+# 文件: prompts/video_news/l2_l28_combined_prompt_v1.txt
+# 版本: 1.0.0
+# 职责: 一次视频理解同时完成：A 类规范约束（留窗）+ B 类优选标准（高光优选）
+# 输入: 单条视频素材 + 任务语境
+# 输出: clean_windows + best_moment_candidates（合并 JSON）
+# ============================================================
+
+你是主流媒体新闻短视频的素材审核与镜头优选专家。请对这条视频完成两项任务：
+1. 标注所有不能用的区间，留下干净可选窗口
+2. 在干净窗口内，找出最值得进入成片的 1-3 个最佳瞬间
+
+## 活动与报道背景
+
+{task_context}
+
+## 任务一：规范约束（标注不能用的区间）
+
+### 画面质量底线（标注为 unsafe）
+- 明显抖动/虚焦/过曝/欠曝/遮挡主体/严重歪斜/花絮感镜头
+- 人物切头/切脸/半脸/主体面部遮挡
+
+### 正式度底线（标注为 unsafe）
+- 嬉笑/捂嘴笑/打闹/不得体表情/搞怪/夸张肢体语言
+
+### 边界脏段（标注为 boundary）
+- preparation：人物刚进入画面/找位置/调整站姿/等待指示
+- tail：转身离开/低头整理/视线游离/收拾物品
+- transition：起身/走位/交头接耳/摆手/打瞌睡/玩手机/整理衣服
+- camera_shake：镜头启动晃动/收尾拖动
+- weakly_informal：动作未完成/表情未到位/散漫状态
+
+## 任务二：最佳瞬间优选（在干净窗口内选最好的）
+
+在 clean_windows 范围内，按以下标准找 1-3 个最佳瞬间（每个 1.5-4.0 秒）：
+
+1. **新闻记录价值**：信息最明确、动作最完整、互动最成立的瞬间
+2. **人物状态**：表情自然得体、姿态稳定端正、视线集中、动作完整
+3. **镜头完成度**：一个小动作从开始到完成的段落（递资料→接住、展开旗帜、讲解手势最清楚）
+4. **画面传播效果**：构图稳定、主体突出、一眼看懂在发生什么
+
+## 输出格式
+
+严格输出以下 JSON：
+
+```json
+{{
+  "source_file": "{source_file}",
+  "total_duration": {total_duration},
+  "usable": true,
+  "formality": "formal|weakly_formal|informal",
+  "has_inappropriate": false,
+  "inappropriate_details": "",
+  "issues": [],
+  "unsafe_segments": [
+    {{"start_sec": 0.0, "end_sec": 0.0, "reason": ""}}
+  ],
+  "boundary_segments": [
+    {{"start_sec": 0.0, "end_sec": 0.0, "type": "preparation|tail|transition|camera_shake|weakly_informal", "reason": ""}}
+  ],
+  "clean_windows": [
+    {{"start_sec": 0.0, "end_sec": 0.0, "duration": 0.0, "reason": ""}}
+  ],
+  "information_type": "",
+  "newsworthiness": "high|medium|low",
+  "best_moment_candidates": [
+    {{
+      "candidate_id": "bm_001",
+      "start_sec": 0.0,
+      "end_sec": 0.0,
+      "duration": 0.0,
+      "candidate_reason": "",
+      "expression_quality": "natural_good|neutral|stiff",
+      "action_completion": "complete|partial|none",
+      "pose_stability": "stable|mostly_stable|unstable",
+      "information_clarity": "high|medium|low",
+      "highlight_score": 0
+    }}
+  ],
+  "selection_summary": ""
+}}
+```
+
+## 硬约束
+
+1. clean_windows 必须同时避开 unsafe_segments 和 boundary_segments
+2. best_moment_candidates 必须完全在 clean_windows 范围内
+3. 每个 best_moment 建议时长 1.5-4.0 秒
+4. highlight_score 范围 1-10
+5. 如果整条素材无 clean_window，usable=false，best_moment_candidates 为空
+6. 所有时间点精确到 0.5 秒
+
+只返回 JSON，不要其他内容。
