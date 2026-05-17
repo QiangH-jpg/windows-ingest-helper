@@ -1,0 +1,16 @@
+{
+  "latest": "3.2",
+  "recommended_min": "3.2",
+  "macos": {
+    "version": "3.2",
+    "sha256": "99a2005a1f5a7e4394f87895eedd1c4daa7f81157457a5071ebd2777de1ca09d",
+    "build_time": "2026-05-17T06:04:01Z",
+    "build_commit": "api-sync-20260517",
+    "download_url": "/ui/downloads/uploader/v3.2/OpenClawUploader-macOS-v3.2.dmg"
+  },
+  "windows": {
+    "version": "3.2",
+    "sha256": "",
+    "download_url": "/ui/downloads/uploader/v3.2/OpenClawUploader-Windows-v3.2.exe"
+  }
+}
