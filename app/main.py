@@ -208,11 +208,27 @@ def _load_resolved_config():
 resolved_config = _load_resolved_config()
 
 # Resolve storage paths
-WORK_DIR = os.path.join(PROJECT_ROOT, resolved_config['storage']['workdir'].lstrip('./').lstrip('.'))
-if not os.path.isabs(WORK_DIR):
-    WORK_DIR = os.path.join(PROJECT_ROOT, resolved_config['storage']['workdir'].replace('./', ''))
+# ✅ 2026-05-18 fix: absolute paths must NOT use lstrip — lstrip('./') treats '/' as
+#    a character set and strips the leading '/' from absolute paths.
+#    Fix: check os.path.isabs() first; use absolute paths directly.
+_storage = resolved_config['storage']
+
+workdir_val = _storage['workdir']
+if os.path.isabs(workdir_val):
+    WORK_DIR = workdir_val
+else:
+    WORK_DIR = os.path.join(PROJECT_ROOT, workdir_val.replace('./', '', 1))
+
 TASKS_DIR = os.path.join(WORK_DIR, 'tasks')
 os.makedirs(TASKS_DIR, exist_ok=True)
+
+# Permanent protection: WORK_DIR must be absolute
+assert os.path.isabs(WORK_DIR), f'[FATAL] WORK_DIR is not absolute: {WORK_DIR}'
+assert os.path.isabs(TASKS_DIR), f'[FATAL] TASKS_DIR is not absolute: {TASKS_DIR}'
+
+print(f'[storage] WORK_DIR={WORK_DIR}')
+print(f'[storage] TASKS_DIR={TASKS_DIR}')
+print(f'[storage] OUTPUT_DIR={_storage.get("outputs_dir", "N/A")}')
 
 from core.config import config
 from core.storage import storage
