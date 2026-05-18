@@ -5345,12 +5345,11 @@ slot_id, reel_clip_id, use_start_offset, use_end_offset, narrative_role, selecti
                                             print(f"    ✅ {_break_sid}: {_old_rid}({_old_src[:15]}) → {_alt_rid}({_alt_src[:15]}) "
                                                   f"[group: {_consecutive_group}→{_alt_grp}, score={_alt_score}]")
                                             _rhythm_fixes += 1
-        1. clean_windows 为空 + weak_safe 中有 unstable
-        2. 所有 clean_windows 的 ffmpeg_action=downgrade
-        3. manifest 中 score_stability < 60
-        4. manifest 中 quality_class=C
-        5. L2 motion_type 含找位/回摆/朝天等
-        """
+        # 1. clean_windows 为空 + weak_safe 中有 unstable
+        # 2. 所有 clean_windows 的 ffmpeg_action=downgrade
+        # 3. manifest 中 score_stability < 60
+        # 4. manifest 中 quality_class=C
+        # 5. L2 motion_type 含找位/回摆/朝天等
         has_cw = bool(l2_record.get('clean_windows', []))
         
         # 检查 weak_safe 中是否有 unstable
@@ -5456,29 +5455,25 @@ slot_id, reel_clip_id, use_start_offset, use_end_offset, narrative_role, selecti
         # 下载
         video_url = tos_url_map.get(src, '')
         if not video_url:
-                                        break
-                            else:
-                                print(f"    ⚠️ {_break_sid}({_break_rid}): 连续{_consecutive_count}次{_consecutive_group}，无合适替代")
-                        
-                        _consecutive_count = 1
-                        _consecutive_start = _ri
-                        _consecutive_group = ''
-                
-                # 处理末尾
-                if _consecutive_count >= 3:
-                    _break_pos = _consecutive_start + 2
-                    if _break_pos < len(_nc_slots):
-                        _break_sid = _nc_slots[_break_pos]['slot_id']
-                        print(f"    ⚠️ 末尾连续{_consecutive_count}次{_consecutive_group}，{_break_sid}未替换")
-                
-                if _rhythm_fixes > 0:
-                    print(f"  [v12.3] ✅ 节奏抑制: 替换 {_rhythm_fixes} 处连续重复")
-                    # 保存替换后的 timeline
-                    _tl_path = output_dir / "l3_timeline_task_{}.json".format(task_id)
-                    with open(_tl_path, 'w', encoding='utf-8') as _tf:
-                        json.dump(timeline, _tf, ensure_ascii=False, indent=2)
-                else:
-                    print(f"  [v12.3] 无连续≥3需替换（adj_same_group={_high_risk_groups} 均为成对）")
+            print(f"  ⚠️ 找不到素材 URL: {src}")
+            continue
+        _consecutive_count = 1
+        _consecutive_start = _ri
+        _consecutive_group = ''
+        # 处理末尾
+        if _consecutive_count >= 3:
+            _break_pos = _consecutive_start + 2
+            if _break_pos < len(_nc_slots):
+                _break_sid = _nc_slots[_break_pos]['slot_id']
+                print(f"    ⚠️ 末尾连续{_consecutive_count}次{_consecutive_group}，{_break_sid}未替换")
+        if _rhythm_fixes > 0:
+            print(f"  [v12.3] ✅ 节奏抑制: 替换 {_rhythm_fixes} 处连续重复")
+            # 保存替换后的 timeline
+            _tl_path = output_dir / "l3_timeline_task_{}.json".format(task_id)
+            with open(_tl_path, 'w', encoding='utf-8') as _tf:
+                json.dump(timeline, _tf, ensure_ascii=False, indent=2)
+        else:
+            print(f"  [v12.3] 无连续≥3需替换（adj_same_group={_high_risk_groups} 均为成对）")
 
     # ============================================================
     # 3. 下载 + 裁切
@@ -5537,7 +5532,7 @@ slot_id, reel_clip_id, use_start_offset, use_end_offset, narrative_role, selecti
         Returns:
             (allowed: bool, reason: str)
         
-        拦截条件（任一满足即拦截）：
+        # 拦截条件（任一满足即拦截）：
             print(f"  ⚠️ 找不到素材 URL: {src}")
             continue
 
@@ -5632,6 +5627,7 @@ slot_id, reel_clip_id, use_start_offset, use_end_offset, narrative_role, selecti
 
     # === v13.3-p2a: repeat classifier for music_only/montage ===
     def classify_music_repeat(candidate, existing_timeline, current_insert_position, edit_mode_check='music_only'):
+        """
         """v13.3-p2a-fix: 重复分类器 - 基于 final timeline gap
         
         Args:
